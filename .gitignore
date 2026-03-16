@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# OS
+.DS_Store
+
+# Virtual env
+.venv/
+
+# Data (large files)
+regime-aware-ml-trading/data/raw/
