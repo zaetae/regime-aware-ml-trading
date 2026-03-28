@@ -14,16 +14,17 @@ from src.patterns.multiple_tops_bottoms import detect_multiple_tops_bottoms
 
 df = load_spy()
 
-sr_df = calculate_support_resistance(df)
+# Each detector uses its own tuned defaults (cooldown, stability, R², etc.)
+sr_df = calculate_support_resistance(df, window=50)
 sr = sr_df["near_support"] | sr_df["near_resistance"]
 
-tri_df = detect_triangle_pattern(df)
+tri_df = detect_triangle_pattern(df, window=50)
 tri = tri_df["triangle_pattern"].notna()
 
-ch_df = detect_channel(df)
+ch_df = detect_channel(df, window=50)
 ch = ch_df["channel_pattern"].notna()
 
-mtb_df = detect_multiple_tops_bottoms(df)
+mtb_df = detect_multiple_tops_bottoms(df, window=50)
 mtb = mtb_df["multiple_top_bottom_pattern"].notna()
 
 combined = sr | tri | ch | mtb
@@ -37,4 +38,4 @@ print(f"{'Channels':<25} {ch.sum():>6}  {ch.mean()*100:>6.1f}%")
 print(f"{'Multi Top/Bottom':<25} {mtb.sum():>6}  {mtb.mean()*100:>6.1f}%")
 print("-" * 42)
 print(f"{'COMBINED (any event)':<25} {combined.sum():>6}  {combined.mean()*100:>6.1f}%")
-print(f"\nTarget: 400-1,200 combined events ({400/n*100:.1f}%-{1200/n*100:.1f}%)")
+print(f"\nTotal bars: {n}")

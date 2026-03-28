@@ -1,21 +1,30 @@
 import pandas as pd
 
-from src.data.utils import compute_atr
 from src.patterns.support_resistance import calculate_support_resistance
 from src.patterns.triangles import detect_triangle_pattern
 from src.patterns.multiple_tops_bottoms import detect_multiple_tops_bottoms
 from src.patterns.channels import detect_channel
 
 
-def scan_all_patterns(df, window=20):
+def scan_all_patterns(df, sr_window=50, tri_window=50, mtb_window=50,
+                      ch_window=50):
     """Run all 4 pattern detectors and return the enriched DataFrame.
+
+    Each detector uses its own tuned default parameters internally.
+    The window arguments here control the lookback period per detector.
 
     Parameters
     ----------
     df : pd.DataFrame
         OHLCV data with columns: Open, High, Low, Close, Volume
-    window : int
-        Rolling window size for all detectors
+    sr_window : int
+        Lookback for support/resistance (default 50).
+    tri_window : int
+        Lookback for triangle detection (default 50).
+    mtb_window : int
+        Lookback for multiple tops/bottoms (default 50).
+    ch_window : int
+        Lookback for channel detection (default 50).
 
     Returns
     -------
@@ -27,10 +36,10 @@ def scan_all_patterns(df, window=20):
         - channel_pattern
         - has_event (True if any pattern detected on that row)
     """
-    df = calculate_support_resistance(df, window=window)
-    df = detect_triangle_pattern(df, window=window)
-    df = detect_multiple_tops_bottoms(df, window=window)
-    df = detect_channel(df, window=window)
+    df = calculate_support_resistance(df, window=sr_window)
+    df = detect_triangle_pattern(df, window=tri_window)
+    df = detect_multiple_tops_bottoms(df, window=mtb_window)
+    df = detect_channel(df, window=ch_window)
 
     # Unified event flag: True if any pattern signal fires
     df["has_event"] = (
@@ -44,9 +53,9 @@ def scan_all_patterns(df, window=20):
     return df
 
 
-def get_events(df, window=20):
+def get_events(df, **kwargs):
     """Return only the rows where a pattern event was detected."""
-    df = scan_all_patterns(df, window=window)
+    df = scan_all_patterns(df, **kwargs)
     return df[df["has_event"]].copy()
 
 

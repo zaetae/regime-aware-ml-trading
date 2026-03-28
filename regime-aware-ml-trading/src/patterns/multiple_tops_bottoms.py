@@ -1,21 +1,33 @@
 import numpy as np
 import pandas as pd
 
+from src.patterns.support_resistance import _apply_cooldown
 
-def detect_multiple_tops_bottoms(df, window=20):
+
+def detect_multiple_tops_bottoms(df, window=20, confirm_bars=5, cooldown=10):
     """Detect multiple top and multiple bottom patterns.
 
     - Multiple Top: price highs are hitting a ceiling (rolling max of highs
-      stays high) while the last 3 closes confirm a downward trend.
+      stays high) while recent closes confirm a downward trend.
     - Multiple Bottom: price lows are hitting a floor (rolling min of lows
-      stays low) while the last 3 closes confirm an upward trend.
+      stays low) while recent closes confirm an upward trend.
+
+    Improvements:
+    - **Longer confirmation** — uses *confirm_bars* (default 5, was 3) for
+      close-trend slope, reducing noise from short-term fluctuations.
+    - **Cooldown** — after a signal fires, suppress the same type for
+      *cooldown* bars to prevent clustering.
 
     Parameters
     ----------
     df : pd.DataFrame
         Must have columns: High, Low, Close
     window : int
-        Rolling window size
+        Rolling window size.
+    confirm_bars : int
+        Number of bars for close-trend slope confirmation (default 5).
+    cooldown : int
+        Minimum bars between consecutive signals of same type (default 10).
 
     Returns
     -------
@@ -40,22 +52,26 @@ def detect_multiple_tops_bottoms(df, window=20):
         close_roll_min > close_roll_min.shift(1)
     )
 
-    # Close-trend confirmation over last 3 bars
-    x3 = np.array([0.0, 1.0, 2.0])
+    # Close-trend confirmation over last confirm_bars bars
+    x_confirm = np.arange(float(confirm_bars))
     closes = df["Close"].values
     close_slope = pd.Series(np.nan, index=df.index)
 
-    for i in range(3, len(df)):
-        close_slope.iloc[i] = np.polyfit(x3, closes[i - 3 : i], 1)[0]
+    for i in range(confirm_bars, len(df)):
+        close_slope.iloc[i] = np.polyfit(
+            x_confirm, closes[i - confirm_bars : i], 1
+        )[0]
 
-    # Multiple Top: closes must be trending down
-    top_mask = top_base & (close_slope < 0)
+    # Raw masks
+    raw_top = top_base & (close_slope < 0)
+    raw_bottom = bottom_base & (close_slope > 0)
 
-    # Multiple Bottom: closes must be trending up
-    bottom_mask = bottom_base & (close_slope > 0)
+    # Apply cooldown independently to each type
+    top_filtered = _apply_cooldown(raw_top, cooldown)
+    bottom_filtered = _apply_cooldown(raw_bottom, cooldown)
 
     df["multiple_top_bottom_pattern"] = None
-    df.loc[top_mask, "multiple_top_bottom_pattern"] = "multiple_top"
-    df.loc[bottom_mask, "multiple_top_bottom_pattern"] = "multiple_bottom"
+    df.loc[top_filtered, "multiple_top_bottom_pattern"] = "multiple_top"
+    df.loc[bottom_filtered, "multiple_top_bottom_pattern"] = "multiple_bottom"
 
     return df
