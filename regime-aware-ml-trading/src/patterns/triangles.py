@@ -5,7 +5,7 @@ from src.data.utils import compute_atr
 
 
 def detect_triangle_pattern(df, window=50, min_convergence_pct=0.05,
-                            cooldown=10):
+                            cooldown=10, return_details=False):
     """Detect triangle breakouts and upper-limit tests.
 
     Uses linear regression on highs/lows over *window* bars to identify
@@ -33,21 +33,21 @@ def detect_triangle_pattern(df, window=50, min_convergence_pct=0.05,
         Minimum range compression required (default 0.05 = 5%).
     cooldown : int
         Minimum bars between consecutive signals (default 10).
+    return_details : bool
+        If True, return (df, details_list) where details_list contains
+        a metadata dict per detection with trendline coefficients.
 
     Returns
     -------
-    pd.DataFrame
-        Original df with added column 'triangle_pattern':
-        - 'ascending_triangle'
-        - 'descending_triangle'
-        - 'symmetric_triangle'
-        - 'desc_triangle_upper_test'
-        - None otherwise
+    pd.DataFrame or (pd.DataFrame, list[dict])
+        Original df with added column 'triangle_pattern'.
+        When return_details=True, also returns a list of detail dicts.
     """
     df = df.copy()
     atr = compute_atr(df, window=14)
 
     signals = pd.Series(None, index=df.index, dtype=object)
+    details = [] if return_details else None
     x = np.arange(window)
     bars_since_last = cooldown + 1
 
@@ -107,6 +107,20 @@ def detect_triangle_pattern(df, window=50, min_convergence_pct=0.05,
                 signals.iloc[i] = "descending_triangle"
             else:
                 signals.iloc[i] = "symmetric_triangle"
+            if return_details:
+                details.append({
+                    "event_date": df.index[i],
+                    "pattern_type": signals.iloc[i],
+                    "start_idx": i - window,
+                    "end_idx": i,
+                    "start_date": df.index[i - window],
+                    "end_date": df.index[i],
+                    "upper_slope": high_coeffs[0],
+                    "upper_intercept": high_coeffs[1],
+                    "lower_slope": low_coeffs[0],
+                    "lower_intercept": low_coeffs[1],
+                    "window": window,
+                })
             bars_since_last = 0
             continue
 
@@ -118,7 +132,23 @@ def detect_triangle_pattern(df, window=50, min_convergence_pct=0.05,
             current_close = df["Close"].iloc[i]
             if abs(current_close - upper_at_current) < 0.3 * atr_i:
                 signals.iloc[i] = "desc_triangle_upper_test"
+                if return_details:
+                    details.append({
+                        "event_date": df.index[i],
+                        "pattern_type": "desc_triangle_upper_test",
+                        "start_idx": i - window,
+                        "end_idx": i,
+                        "start_date": df.index[i - window],
+                        "end_date": df.index[i],
+                        "upper_slope": high_coeffs[0],
+                        "upper_intercept": high_coeffs[1],
+                        "lower_slope": low_coeffs[0],
+                        "lower_intercept": low_coeffs[1],
+                        "window": window,
+                    })
                 bars_since_last = 0
 
     df["triangle_pattern"] = signals
+    if return_details:
+        return df, details
     return df

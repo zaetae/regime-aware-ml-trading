@@ -41,7 +41,7 @@ def _count_distinct_touches(values, line, band, min_separation=5):
 
 
 def detect_channel(df, window=50, slope_tolerance=0.15, min_touches=4,
-                   r2_min=0.70, cooldown=10):
+                   r2_min=0.70, cooldown=10, return_details=False):
     """Detect price channels defined by two parallel trendlines.
 
     Fits linear trendlines to highs and lows over *window* bars.  A valid
@@ -69,19 +69,21 @@ def detect_channel(df, window=50, slope_tolerance=0.15, min_touches=4,
         Minimum R² for both trendline regressions (default 0.70).
     cooldown : int
         Minimum bars between consecutive channel signals (default 10).
+    return_details : bool
+        If True, return (df, details_list) where details_list contains
+        a metadata dict per detection with trendline coefficients.
 
     Returns
     -------
-    pd.DataFrame
-        Original df with added column 'channel_pattern':
-        - 'channel_up'
-        - 'channel_down'
-        - None otherwise
+    pd.DataFrame or (pd.DataFrame, list[dict])
+        Original df with added column 'channel_pattern'.
+        When return_details=True, also returns a list of detail dicts.
     """
     df = df.copy()
     atr = compute_atr(df, window=14)
 
     signals = pd.Series(None, index=df.index, dtype=object)
+    details = [] if return_details else None
     x = np.arange(window)
     bars_since_last = cooldown + 1  # allow first signal
 
@@ -152,7 +154,23 @@ def detect_channel(df, window=50, slope_tolerance=0.15, min_touches=4,
 
         if near_upper or near_lower:
             signals.iloc[i] = "channel_up" if high_slope > 0 else "channel_down"
+            if return_details:
+                details.append({
+                    "event_date": df.index[i],
+                    "pattern_type": signals.iloc[i],
+                    "start_idx": i - window,
+                    "end_idx": i,
+                    "start_date": df.index[i - window],
+                    "end_date": df.index[i],
+                    "upper_slope": high_coeffs[0],
+                    "upper_intercept": high_coeffs[1],
+                    "lower_slope": low_coeffs[0],
+                    "lower_intercept": low_coeffs[1],
+                    "window": window,
+                })
             bars_since_last = 0
 
     df["channel_pattern"] = signals
+    if return_details:
+        return df, details
     return df
