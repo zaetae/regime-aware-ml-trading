@@ -1,19 +1,29 @@
 import pandas as pd
-import os
+from pathlib import Path
 
-# Resolve data directory relative to this file's location.
-# os.path.realpath resolves symlinks so the ../.. traversal always lands
-# at the project root, even when the module is imported via sys.path on Colab.
-DATA_DIR = os.path.join(os.path.realpath(os.path.dirname(__file__)), "..", "..", "data")
+# Find project root by looking for src/ directory
+def _find_project_root():
+    """Find the project root directory containing src/."""
+    current = Path.cwd()
+    for _ in range(10):  # Prevent infinite loop
+        if (current / "src").is_dir():
+            return current
+        current = current.parent
+    # Fallback: assume we're in the project root or notebooks/ subdirectory
+    return Path.cwd().parent if (Path.cwd().parent / "src").is_dir() else Path.cwd()
+
+PROJECT_ROOT = _find_project_root()
+DATA_DIR = PROJECT_ROOT / "data"
 
 
 def load_spy():
     """Load SPY data from raw CSV, clean it, and return a DataFrame."""
-    path = os.path.join(DATA_DIR, "raw", "spy.csv")
+    path = DATA_DIR / "raw" / "spy.csv"
 
-    # Fallback: if the __file__-based path doesn't exist, try cwd/data/
-    if not os.path.isfile(path):
-        path = os.path.join(os.getcwd(), "data", "raw", "spy.csv")
+    # Fallback: if the path doesn't exist, try relative to current working directory
+    if not path.is_file():
+        path = Path.cwd() / "data" / "raw" / "spy.csv"
+    
     df = pd.read_csv(path, index_col="Date", parse_dates=True)
     df = df.sort_index()
     df = df.dropna()
