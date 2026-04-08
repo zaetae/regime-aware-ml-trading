@@ -1,18 +1,11 @@
 import pandas as pd
 from pathlib import Path
 
-# Find project root by looking for src/ directory
-def _find_project_root():
-    """Find the project root directory containing src/."""
-    current = Path.cwd()
-    for _ in range(10):  # Prevent infinite loop
-        if (current / "src").is_dir():
-            return current
-        current = current.parent
-    # Fallback: assume we're in the project root or notebooks/ subdirectory
-    return Path.cwd().parent if (Path.cwd().parent / "src").is_dir() else Path.cwd()
-
-PROJECT_ROOT = _find_project_root()
+# Resolve data directory relative to this file's location.
+# __file__ is always correct regardless of the working directory.
+# src/data/load_data.py  →  ../../data  =  <project_root>/data
+_THIS_DIR = Path(__file__).resolve().parent          # src/data/
+PROJECT_ROOT = _THIS_DIR.parent.parent               # <project_root>
 DATA_DIR = PROJECT_ROOT / "data"
 
 
@@ -24,9 +17,10 @@ def load_spy():
     if not path.is_file():
         path = Path.cwd() / "data" / "raw" / "spy.csv"
     
-    # If still not found, try to download it
+    # If still not found, try to download it to the canonical location
     if not path.is_file():
-        print(f"SPY data not found at {path}, downloading...")
+        path = DATA_DIR / "raw" / "spy.csv"
+        print(f"SPY data not found, downloading to {path}...")
         try:
             import yfinance as yf
             df = yf.download("SPY", start="2010-01-01", end="2026-01-01", auto_adjust=False)
