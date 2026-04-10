@@ -77,17 +77,23 @@ def detect_triangle_pattern(df, window=20, min_convergence_pct=0.05,
 
         # --- Step 2: linregress on pivots → slope, intercept, r ---
         # Exactly as the notebook: slmax, intercmax, rmax, ...
-        slmax, intercmax, rmax, _, _ = linregress(sh_x, sh_y)
-        slmin, intercmin, rmin, _, _ = linregress(sl_x, sl_y)
+        slmax, _, rmax, _, _ = linregress(sh_x, sh_y)
+        slmin, _, rmin, _, _ = linregress(sl_x, sl_y)
 
         # --- Step 3: quality gate (|r| >= 0.9, notebook default) ---
         if abs(rmax) < min_r or abs(rmin) < min_r:
             continue
 
-        # Standard linregress intercepts — lines go THROUGH the pivots.
-        # This is what the notebook does (no envelope adjustment).
-        high_coeffs = [slmax, intercmax]
-        low_coeffs = [slmin, intercmin]
+        # Adjust intercepts so the lines BOUND the pivots (not cut through).
+        # Upper line: sits on top of the highest swing high.
+        # Lower line: sits below the lowest swing low.
+        # This matches the reference notebook's adjintercmax/adjintercmin
+        # approach and produces the classic triangle shape where candles
+        # are INSIDE the two converging lines.
+        adj_intercmax = float(np.max(sh_y - slmax * sh_x))
+        adj_intercmin = float(np.min(sl_y - slmin * sl_x))
+        high_coeffs = [slmax, adj_intercmax]
+        low_coeffs = [slmin, adj_intercmin]
 
         x = np.arange(window)
         upper_line = np.polyval(high_coeffs, x)
