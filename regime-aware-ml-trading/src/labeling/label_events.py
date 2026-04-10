@@ -161,13 +161,13 @@ def triple_barrier_label(df, events, pt_mult=2.0, sl_mult=2.0,
 # ------------------------------------------------------------------
 
 def label_events(df, pt_mult=2.0, sl_mult=2.0, max_holding=10,
-                 atr_window=14):
+                 atr_window=14, exclude_patterns=None):
     """Run the scanner (if needed) and apply triple-barrier labels.
 
     This is the main entry point for downstream code.  It:
 
     1. Runs ``scan_all_patterns`` if ``has_event`` is not already in *df*.
-    2. Extracts event rows.
+    2. Extracts event rows (optionally filtering out excluded pattern types).
     3. Applies :func:`triple_barrier_label`.
 
     Parameters
@@ -176,6 +176,11 @@ def label_events(df, pt_mult=2.0, sl_mult=2.0, max_holding=10,
         Full OHLCV dataset (with or without pattern columns).
     pt_mult, sl_mult, max_holding, atr_window
         Forwarded to :func:`triple_barrier_label`.
+    exclude_patterns : list[str], optional
+        Pattern column names to exclude, e.g.
+        ``['triangle_pattern', 'channel_pattern']``.
+        Rows whose *only* active signal comes from an excluded column
+        are dropped.
 
     Returns
     -------
@@ -188,5 +193,34 @@ def label_events(df, pt_mult=2.0, sl_mult=2.0, max_holding=10,
         df = scan_all_patterns(df)
 
     events = df[df["has_event"]].copy()
+
+    if exclude_patterns:
+        # Null-out excluded columns so _get_event_type picks the next
+        # available signal, then drop rows with no remaining signal.
+        for col in exclude_patterns:
+            if col in events.columns:
+                if events[col].dtype == bool:
+                    events[col] = False
+                else:
+                    events[col] = pd.NA
+        # Keep only rows that still have at least one active signal
+        all_pattern_cols = ["near_support", "near_resistance",
+                            "triangle_pattern",
+                            "multiple_top_bottom_pattern",
+                            "channel_pattern"]
+        kept_signals = []
+        for col in all_pattern_cols:
+            if col not in events.columns:
+                continue
+            if events[col].dtype == bool:
+                kept_signals.append(events[col])
+            else:
+                kept_signals.append(events[col].notna())
+        if kept_signals:
+            has_any = kept_signals[0]
+            for s in kept_signals[1:]:
+                has_any = has_any | s
+            events = events[has_any]
+
     return triple_barrier_label(df, events, pt_mult, sl_mult,
                                 max_holding, atr_window)

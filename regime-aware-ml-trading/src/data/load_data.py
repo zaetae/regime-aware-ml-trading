@@ -36,6 +36,9 @@ def load_spy():
             raise FileNotFoundError(f"SPY data not found at {path} and yfinance not available to download")
     
     df = pd.read_csv(path, index_col="Date", parse_dates=True)
+    # yfinance may save timezone-aware dates — strip tz for consistent plotting
+    if df.index.tz is not None:
+        df.index = df.index.tz_localize(None)
     df = df.sort_index()
     df = df.dropna()
     # Ensure expected columns

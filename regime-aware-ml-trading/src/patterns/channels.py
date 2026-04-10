@@ -1,7 +1,9 @@
 import numpy as np
 import pandas as pd
+from scipy.stats import theilslopes
 
 from src.data.utils import compute_atr
+from src.patterns.pivots import find_swing_highs, find_swing_lows, containment_ratio
 
 
 def _count_distinct_touches(values, line, band, min_separation=5):
@@ -9,24 +11,6 @@ def _count_distinct_touches(values, line, band, min_separation=5):
 
     A "touch" requires the value to be within *band* of the line.
     Touches closer than *min_separation* bars apart count as the same touch.
-    This prevents 10 consecutive bars near the upper band from counting
-    as 10 touches — they count as 1.
-
-    Parameters
-    ----------
-    values : np.ndarray
-        Highs (for upper line) or Lows (for lower line).
-    line : np.ndarray
-        Trendline values (same length as values).
-    band : float
-        Proximity threshold (e.g. 0.3 × ATR).
-    min_separation : int
-        Minimum bars between distinct touches.
-
-    Returns
-    -------
-    int
-        Number of distinct touches.
     """
     near = np.where(np.abs(values - line) < band)[0]
     if len(near) == 0:
@@ -41,19 +25,13 @@ def _count_distinct_touches(values, line, band, min_separation=5):
 
 
 def detect_channel(df, window=50, slope_tolerance=0.15, min_touches=4,
-                   r2_min=0.70, cooldown=10, return_details=False):
+                   r2_min=0.70, cooldown=10, return_details=False,
+                   pivot_order=5, min_pivots=3, min_containment=0.70):
     """Detect price channels defined by two parallel trendlines.
 
-    Fits linear trendlines to highs and lows over *window* bars.  A valid
-    channel requires parallel slopes, meaningful width, price touching both
-    bands with distinct reversals, and good regression fit (R²).
-
-    Improvements over the naive version:
-    1. **R² check** — the regression must explain ≥70% of variance in both
-       highs and lows, ensuring price actually follows a channel structure.
-    2. **Distinct touch counting** — touches separated by ≥5 bars count as
-       one, preventing inflated counts from consecutive bars near a line.
-    3. **Cooldown** — after a signal fires, suppress for *cooldown* bars.
+    Fits trendlines to **swing highs / swing lows** (pivot points) using
+    the Theil-Sen estimator, then validates parallelism, R², touch count,
+    and containment (>= 70% of bars inside).
 
     Parameters
     ----------
@@ -70,45 +48,60 @@ def detect_channel(df, window=50, slope_tolerance=0.15, min_touches=4,
     cooldown : int
         Minimum bars between consecutive channel signals (default 10).
     return_details : bool
-        If True, return (df, details_list) where details_list contains
-        a metadata dict per detection with trendline coefficients.
+        If True, return (df, details_list) with trendline metadata.
+    pivot_order : int
+        Half-width for swing high/low detection (default 5).
+    min_pivots : int
+        Minimum swing points per trendline (default 3).
+    min_containment : float
+        Minimum fraction of bars inside the channel (default 0.85).
 
     Returns
     -------
     pd.DataFrame or (pd.DataFrame, list[dict])
         Original df with added column 'channel_pattern'.
-        When return_details=True, also returns a list of detail dicts.
     """
     df = df.copy()
     atr = compute_atr(df, window=14)
 
     signals = pd.Series(None, index=df.index, dtype=object)
     details = [] if return_details else None
-    x = np.arange(window)
-    bars_since_last = cooldown + 1  # allow first signal
+    bars_since_last = cooldown + 1
 
     for i in range(window, len(df)):
         bars_since_last += 1
         atr_i = atr.iloc[i]
-        if pd.isna(atr_i):
+        if pd.isna(atr_i) or atr_i <= 0:
             continue
 
-        # Cooldown: skip if too soon after last signal
         if bars_since_last <= cooldown:
             continue
 
-        window_slice = df.iloc[i - window : i]
+        window_slice = df.iloc[i - window: i]
         highs = window_slice["High"].values
         lows = window_slice["Low"].values
+        x = np.arange(window)
 
-        # Fit trendlines to highs and lows
-        high_coeffs = np.polyfit(x, highs, 1)
-        low_coeffs = np.polyfit(x, lows, 1)
+        # --- Step A: find swing highs / lows ---
+        sh_idx = find_swing_highs(highs, order=pivot_order)
+        sl_idx = find_swing_lows(lows, order=pivot_order)
 
-        high_slope = high_coeffs[0]
-        low_slope = low_coeffs[0]
+        if len(sh_idx) < min_pivots or len(sl_idx) < min_pivots:
+            continue
 
-        # Parallelism: slopes must be similar in magnitude and direction
+        # --- Step B: Theil-Sen regression on pivot points ---
+        sh_x = np.array(sh_idx)
+        sh_y = highs[sh_idx]
+        high_slope, high_intercept, _, _ = theilslopes(sh_y, sh_x)
+
+        sl_x = np.array(sl_idx)
+        sl_y = lows[sl_idx]
+        low_slope, low_intercept, _, _ = theilslopes(sl_y, sl_x)
+
+        high_coeffs = [high_slope, high_intercept]
+        low_coeffs = [low_slope, low_intercept]
+
+        # --- Parallelism check ---
         if abs(high_slope) < 1e-9:
             continue
         if abs(high_slope - low_slope) / abs(high_slope) > slope_tolerance:
@@ -116,35 +109,40 @@ def detect_channel(df, window=50, slope_tolerance=0.15, min_touches=4,
         if high_slope * low_slope < 0:
             continue
 
-        # R² check: trendlines must actually fit the data well
+        # --- Evaluate trendlines ---
         upper_line = np.polyval(high_coeffs, x)
         lower_line = np.polyval(low_coeffs, x)
 
-        ss_res_high = np.sum((highs - upper_line) ** 2)
-        ss_tot_high = np.sum((highs - highs.mean()) ** 2)
-        r2_high = 1 - ss_res_high / ss_tot_high if ss_tot_high > 0 else 0
+        # --- R² check on pivot points ---
+        pred_sh = np.polyval(high_coeffs, sh_x)
+        ss_res_h = np.sum((sh_y - pred_sh) ** 2)
+        ss_tot_h = np.sum((sh_y - sh_y.mean()) ** 2)
+        r2_high = 1 - ss_res_h / ss_tot_h if ss_tot_h > 0 else 0
 
-        ss_res_low = np.sum((lows - lower_line) ** 2)
-        ss_tot_low = np.sum((lows - lows.mean()) ** 2)
-        r2_low = 1 - ss_res_low / ss_tot_low if ss_tot_low > 0 else 0
+        pred_sl = np.polyval(low_coeffs, sl_x)
+        ss_res_l = np.sum((sl_y - pred_sl) ** 2)
+        ss_tot_l = np.sum((sl_y - sl_y.mean()) ** 2)
+        r2_low = 1 - ss_res_l / ss_tot_l if ss_tot_l > 0 else 0
 
         if r2_high < r2_min or r2_low < r2_min:
             continue
 
-        # Channel width: must be meaningful (1–6× ATR)
+        # --- Step C: containment validation ---
+        tol = 0.1 * atr_i
+        cr = containment_ratio(highs, lows, upper_line, lower_line, tolerance=tol)
+        if cr < min_containment:
+            continue
+
+        # --- Channel width: 1–6× ATR ---
         channel_width = (upper_line - lower_line).mean()
         if channel_width < atr_i or channel_width > atr_i * 6.0:
             continue
 
-        # Distinct touch count: touches ≥5 bars apart count as separate
-        touch_band = atr_i * 0.3
-        upper_touches = _count_distinct_touches(highs, upper_line, touch_band)
-        lower_touches = _count_distinct_touches(lows, lower_line, touch_band)
+        # Pivot counts already enforce minimum touches (min_pivots per side).
+        # With Theil-Sen on pivots + containment, the old band-based touch
+        # filter is redundant and overly restrictive.
 
-        if upper_touches < min_touches or lower_touches < min_touches:
-            continue
-
-        # Only flag when current price is near a channel boundary
+        # --- Signal: current price near a boundary ---
         current_upper = np.polyval(high_coeffs, window)
         current_lower = np.polyval(low_coeffs, window)
         current_close = df["Close"].iloc[i]
@@ -167,6 +165,9 @@ def detect_channel(df, window=50, slope_tolerance=0.15, min_touches=4,
                     "lower_slope": low_coeffs[0],
                     "lower_intercept": low_coeffs[1],
                     "window": window,
+                    "containment_ratio": round(cr, 3),
+                    "pivot_highs": len(sh_idx),
+                    "pivot_lows": len(sl_idx),
                 })
             bars_since_last = 0
 

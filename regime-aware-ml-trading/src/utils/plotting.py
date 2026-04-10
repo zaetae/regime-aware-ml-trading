@@ -29,7 +29,8 @@ def plot_candlestick(df, ax=None, title=None, figsize=(14, 5)):
     -------
     fig, ax : matplotlib Figure and Axes
     """
-    if ax is None:
+    created_fig = ax is None
+    if created_fig:
         fig, ax = plt.subplots(figsize=figsize)
     else:
         fig = ax.get_figure()
@@ -62,14 +63,24 @@ def plot_candlestick(df, ax=None, title=None, figsize=(14, 5)):
 
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
     ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-    fig.autofmt_xdate(rotation=45)
+    # Only call autofmt_xdate when we own the figure (no external axes).
+    # Calling it per-subplot conflicts with tight_layout() on Colab and
+    # can produce blank figures.
+    if created_fig:
+        fig.autofmt_xdate(rotation=45)
+    else:
+        for label in ax.get_xticklabels():
+            label.set_rotation(45)
+            label.set_ha("right")
+            label.set_fontsize(7)
     ax.set_ylabel("Price")
     if title:
         ax.set_title(title)
     ax.grid(True, alpha=0.3)
 
-    # Let matplotlib auto-scale based on the data
-    ax.autoscale_view()
+    # Explicit y-limits — patches are not always included in autoscale
+    ax.set_ylim(df["Low"].min() * 0.999, df["High"].max() * 1.001)
+    ax.autoscale_view(scaley=False)
 
     return fig, ax
 
@@ -99,7 +110,8 @@ def add_trendline(ax, df, coeffs, window, color="blue", linestyle="-", alpha=0.6
         Number of bars in the window.
     color, linestyle, alpha, label : styling parameters.
     """
-    x = np.arange(window)
+    n = len(df)
+    x = np.arange(n)
     y = np.polyval(coeffs, x)
     dates = mdates.date2num(df.index.to_pydatetime())
     ax.plot(dates, y, color=color, linestyle=linestyle, alpha=alpha, label=label)
