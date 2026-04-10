@@ -6,51 +6,41 @@ from src.data.utils import compute_atr
 from src.patterns.pivots import find_swing_highs, find_swing_lows, containment_ratio
 
 
-def detect_triangle_pattern(df, window=50, min_convergence_pct=0.05,
+def detect_triangle_pattern(df, window=20, min_convergence_pct=0.05,
                             cooldown=10, return_details=False,
-                            pivot_order=3, min_pivots=2,
-                            min_r=0.85, min_containment=0.70):
-    """Detect triangle breakouts and upper-limit tests.
+                            pivot_order=3, min_pivots=2, min_r=0.9):
+    """Detect triangle patterns using the pivot + linregress approach.
 
-    Uses the pivot-point + linregress approach (cf. *TrianglePricePatterns*
-    notebook) with envelope intercept adjustment and containment validation.
+    Closely follows the *TrianglePricePatterns* reference notebook:
 
-    Pipeline per window:
-
-    1. Identify swing highs / lows (``pivot_order`` = 3).
-    2. ``linregress`` on pivot points → slope + correlation *r*.
-    3. Require ``|r| >= min_r`` on each trendline (pivot alignment quality).
-    4. Shift intercepts to create an **envelope** (upper line caps all swing
-       highs, lower line floors all swing lows).
-    5. Validate containment >= ``min_containment``.
-    6. Check convergence and classify triangle type.
-    7. Fire breakout or upper-limit-test signal.
+    1. Identify swing highs / lows (±3-bar neighbourhood).
+    2. ``linregress`` on pivot points → slope, intercept, *r*.
+    3. Require ``|r| >= 0.9`` on each trendline (tight pivot alignment).
+    4. Classify by slope signs: ascending / descending / symmetric.
+    5. Fire signal when current bar breaks out of the recent range.
 
     Parameters
     ----------
     df : pd.DataFrame
         Must have columns: High, Low, Close
     window : int
-        Lookback window for the formation (default 50).
+        Lookback window (default 20, matching the reference notebook).
     min_convergence_pct : float
-        Minimum range compression required (default 0.05 = 5%).
+        Minimum range compression (default 0.05 = 5%).
     cooldown : int
-        Minimum bars between consecutive signals (default 10).
+        Minimum bars between signals (default 10).
     return_details : bool
         If True, return (df, details_list) with trendline metadata.
     pivot_order : int
-        Half-width for swing detection (default 3, per reference notebook).
+        Half-width for swing detection (default 3).
     min_pivots : int
         Minimum swing points per trendline (default 2).
     min_r : float
-        Minimum |correlation coefficient| on each trendline (default 0.85).
-    min_containment : float
-        Minimum fraction of bars inside the triangle (default 0.70).
+        Minimum |r| on each trendline (default 0.9).
 
     Returns
     -------
     pd.DataFrame or (pd.DataFrame, list[dict])
-        Original df with added column 'triangle_pattern'.
     """
     df = df.copy()
     atr = compute_atr(df, window=14)
@@ -64,81 +54,75 @@ def detect_triangle_pattern(df, window=50, min_convergence_pct=0.05,
         atr_i = atr.iloc[i]
         if pd.isna(atr_i) or atr_i <= 0:
             continue
-
         if bars_since_last <= cooldown:
             continue
 
         window_slice = df.iloc[i - window: i]
         highs = window_slice["High"].values
         lows = window_slice["Low"].values
-        x = np.arange(window)
 
-        # --- Step 1: find swing highs / lows (order=3, per reference) ---
+        # --- Step 1: find swing highs / lows (order=3) ---
         sh_idx = find_swing_highs(highs, order=pivot_order)
         sl_idx = find_swing_lows(lows, order=pivot_order)
 
+        # Need at least min_pivots per side, and at least 3 total
+        # (matching notebook: "if xxmax.size<3 and xxmin.size<3: continue")
         if len(sh_idx) < min_pivots or len(sl_idx) < min_pivots:
             continue
-
-        sh_x = np.array(sh_idx)
-        sh_y = highs[sh_idx]
-        sl_x = np.array(sl_idx)
-        sl_y = lows[sl_idx]
-
-        # --- Step 2: linregress on pivots → slope + r ---
-        slope_upper, _, r_upper, _, _ = linregress(sh_x, sh_y)
-        slope_lower, _, r_lower, _, _ = linregress(sl_x, sl_y)
-
-        # --- Step 3: quality gate — pivots must align tightly ---
-        if abs(r_upper) < min_r or abs(r_lower) < min_r:
+        if (len(sh_idx) + len(sl_idx)) < 3:
             continue
 
-        # --- Step 4: envelope intercepts ---
-        # Shift upper line UP so it caps ALL swing highs.
-        # Shift lower line DOWN so it floors ALL swing lows.
-        intercept_upper = float(np.max(sh_y - slope_upper * sh_x))
-        intercept_lower = float(np.min(sl_y - slope_lower * sl_x))
+        sh_x, sh_y = np.array(sh_idx, dtype=float), highs[sh_idx]
+        sl_x, sl_y = np.array(sl_idx, dtype=float), lows[sl_idx]
 
-        high_coeffs = [slope_upper, intercept_upper]
-        low_coeffs = [slope_lower, intercept_lower]
+        # --- Step 2: linregress on pivots → slope, intercept, r ---
+        # Exactly as the notebook: slmax, intercmax, rmax, ...
+        slmax, intercmax, rmax, _, _ = linregress(sh_x, sh_y)
+        slmin, intercmin, rmin, _, _ = linregress(sl_x, sl_y)
 
+        # --- Step 3: quality gate (|r| >= 0.9, notebook default) ---
+        if abs(rmax) < min_r or abs(rmin) < min_r:
+            continue
+
+        # Standard linregress intercepts — lines go THROUGH the pivots.
+        # This is what the notebook does (no envelope adjustment).
+        high_coeffs = [slmax, intercmax]
+        low_coeffs = [slmin, intercmin]
+
+        x = np.arange(window)
         upper_line = np.polyval(high_coeffs, x)
         lower_line = np.polyval(low_coeffs, x)
 
-        # --- Step 5: containment validation ---
-        tol = 0.1 * atr_i
-        cr = containment_ratio(highs, lows, upper_line, lower_line,
-                               tolerance=tol)
-        if cr < min_containment:
+        # --- Step 4: convergence check ---
+        range_start = upper_line[0] - lower_line[0]
+        range_end = upper_line[-1] - lower_line[-1]
+        if range_start <= 0 or range_end < 0:
             continue
-
-        # --- Step 6: convergence check ---
-        range_start = upper_line[:5].mean() - lower_line[:5].mean()
-        range_end = upper_line[-5:].mean() - lower_line[-5:].mean()
-
-        if range_start <= 0:
-            continue
-
         compression = (range_start - range_end) / range_start
         if compression < min_convergence_pct:
             continue
 
-        # --- Classify triangle type (ATR-normalised slopes) ---
+        # --- Step 5: classify triangle type (ATR-normalised slopes) ---
+        # Notebook uses absolute thresholds; we normalise by ATR for
+        # robustness across price levels.
         flat_threshold = 0.1 * atr_i / window
-        is_ascending = slope_upper < flat_threshold and slope_lower > flat_threshold
-        is_descending = (slope_upper < -flat_threshold
-                         and slope_lower > -flat_threshold)
-        is_symmetric = (slope_upper < -flat_threshold
-                        and slope_lower > flat_threshold)
+        is_ascending = abs(slmax) < flat_threshold and slmin > flat_threshold
+        is_descending = slmax < -flat_threshold and abs(slmin) < flat_threshold
+        is_symmetric = slmax < -flat_threshold and slmin > flat_threshold
 
         if not (is_ascending or is_descending or is_symmetric):
             continue
 
-        # --- Step 7a: breakout signal ---
+        # Containment (informational — not a hard gate with tight lines)
+        tol = 0.1 * atr_i
+        cr = containment_ratio(highs, lows, upper_line, lower_line,
+                               tolerance=tol)
+
+        # --- Step 6a: breakout signal ---
         current_high = df["High"].iloc[i]
         current_low = df["Low"].iloc[i]
-        recent_high = highs[-5:].max()
-        recent_low = lows[-5:].min()
+        recent_high = highs[-3:].max()
+        recent_low = lows[-3:].min()
 
         breakout_up = current_high > recent_high + 0.3 * atr_i
         breakout_down = current_low < recent_low - 0.3 * atr_i
@@ -153,12 +137,12 @@ def detect_triangle_pattern(df, window=50, min_convergence_pct=0.05,
             if return_details:
                 details.append(_make_detail(
                     df, i, signals.iloc[i], high_coeffs, low_coeffs,
-                    window, cr, r_upper, r_lower, sh_idx, sl_idx,
+                    window, cr, rmax, rmin, sh_idx, sl_idx,
                 ))
             bars_since_last = 0
             continue
 
-        # --- Step 7b: descending triangle upper-limit test ---
+        # --- Step 6b: descending triangle upper-limit test ---
         if is_descending:
             upper_at_current = np.polyval(high_coeffs, window)
             current_close = df["Close"].iloc[i]
@@ -168,7 +152,7 @@ def detect_triangle_pattern(df, window=50, min_convergence_pct=0.05,
                     details.append(_make_detail(
                         df, i, "desc_triangle_upper_test",
                         high_coeffs, low_coeffs,
-                        window, cr, r_upper, r_lower, sh_idx, sl_idx,
+                        window, cr, rmax, rmin, sh_idx, sl_idx,
                     ))
                 bars_since_last = 0
 

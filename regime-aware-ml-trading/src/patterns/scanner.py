@@ -6,7 +6,7 @@ from src.patterns.multiple_tops_bottoms import detect_multiple_tops_bottoms
 from src.patterns.channels import detect_channel
 
 
-def scan_all_patterns(df, sr_window=50, tri_window=50, mtb_window=50,
+def scan_all_patterns(df, sr_window=50, tri_window=20, mtb_window=50,
                       ch_window=50):
     """Run all 4 pattern detectors and return the enriched DataFrame.
 
@@ -20,7 +20,7 @@ def scan_all_patterns(df, sr_window=50, tri_window=50, mtb_window=50,
     sr_window : int
         Lookback for support/resistance (default 50).
     tri_window : int
-        Lookback for triangle detection (default 50).
+        Lookback for triangle detection (default 20).
     mtb_window : int
         Lookback for multiple tops/bottoms (default 50).
     ch_window : int
