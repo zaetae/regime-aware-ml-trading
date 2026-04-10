@@ -165,12 +165,17 @@ def detect_triangle_pattern(df, window=20, min_convergence_pct=0.05,
 def _make_detail(df, i, pattern_type, high_coeffs, low_coeffs,
                  window, cr, r_upper, r_lower, sh_idx, sl_idx):
     """Build a metadata dict for one detection."""
+    start = i - window
+    # Store absolute DataFrame indices and prices for each pivot
+    # so the notebook can mark them on the chart.
+    highs = df["High"].values
+    lows = df["Low"].values
     return {
         "event_date": df.index[i],
         "pattern_type": pattern_type,
-        "start_idx": i - window,
+        "start_idx": start,
         "end_idx": i,
-        "start_date": df.index[i - window],
+        "start_date": df.index[start],
         "end_date": df.index[i],
         "upper_slope": high_coeffs[0],
         "upper_intercept": high_coeffs[1],
@@ -182,4 +187,9 @@ def _make_detail(df, i, pattern_type, high_coeffs, low_coeffs,
         "r_lower": round(abs(r_lower), 3),
         "pivot_highs": len(sh_idx),
         "pivot_lows": len(sl_idx),
+        # Absolute indices + prices of every pivot point
+        "swing_high_idx": [start + int(j) for j in sh_idx],
+        "swing_high_prices": [float(highs[start + int(j)]) for j in sh_idx],
+        "swing_low_idx": [start + int(j) for j in sl_idx],
+        "swing_low_prices": [float(lows[start + int(j)]) for j in sl_idx],
     }
