@@ -6,9 +6,9 @@ from src.data.utils import compute_atr
 from src.patterns.pivots import find_swing_highs, find_swing_lows, containment_ratio
 
 
-def detect_triangle_pattern(df, window=20, min_convergence_pct=0.05,
+def detect_triangle_pattern(df, window=25, min_convergence_pct=0.05,
                             cooldown=10, return_details=False,
-                            pivot_order=3, min_pivots=2, min_r=0.9):
+                            pivot_order=3, min_pivots=2, min_r=0.85):
     """Detect triangle patterns using the pivot + linregress approach.
 
     Closely follows the *TrianglePricePatterns* reference notebook:
