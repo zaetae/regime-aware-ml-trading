@@ -6,12 +6,10 @@ from src.patterns.multiple_tops_bottoms import detect_multiple_tops_bottoms
 from src.patterns.channels import detect_channel
 
 
-def scan_all_patterns(df, sr_window=50, tri_window=25, mtb_window=50,
-                      ch_window=30):
+def scan_all_patterns(df, sr_window=50, tri_window=25, mtb_window=50):
     """Run all 4 pattern detectors and return the enriched DataFrame.
 
     Each detector uses its own tuned default parameters internally.
-    The window arguments here control the lookback period per detector.
 
     Parameters
     ----------
@@ -23,8 +21,6 @@ def scan_all_patterns(df, sr_window=50, tri_window=25, mtb_window=50,
         Lookback for triangle detection (default 25).
     mtb_window : int
         Lookback for multiple tops/bottoms (default 50).
-    ch_window : int
-        Lookback for channel detection (default 30).
 
     Returns
     -------
@@ -39,7 +35,7 @@ def scan_all_patterns(df, sr_window=50, tri_window=25, mtb_window=50,
     df = calculate_support_resistance(df, window=sr_window)
     df = detect_triangle_pattern(df, window=tri_window)
     df = detect_multiple_tops_bottoms(df, window=mtb_window)
-    df = detect_channel(df, window=ch_window)
+    df = detect_channel(df)
 
     # Unified event flag: True if any pattern signal fires
     df["has_event"] = (

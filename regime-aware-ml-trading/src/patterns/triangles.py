@@ -3,7 +3,7 @@ import pandas as pd
 from scipy.stats import linregress
 
 from src.data.utils import compute_atr
-from src.patterns.pivots import find_swing_highs, find_swing_lows, containment_ratio
+from src.patterns.pivots import find_swing_highs, find_swing_lows, containment_ratio, count_touches
 
 
 def detect_triangle_pattern(df, window=25, min_convergence_pct=0.05,
@@ -143,7 +143,7 @@ def detect_triangle_pattern(df, window=25, min_convergence_pct=0.05,
             if return_details:
                 details.append(_make_detail(
                     df, i, signals.iloc[i], high_coeffs, low_coeffs,
-                    window, cr, rmax, rmin, sh_idx, sl_idx,
+                    window, cr, rmax, rmin, sh_idx, sl_idx, atr_i,
                 ))
             bars_since_last = 0
             continue
@@ -169,13 +169,23 @@ def detect_triangle_pattern(df, window=25, min_convergence_pct=0.05,
 
 
 def _make_detail(df, i, pattern_type, high_coeffs, low_coeffs,
-                 window, cr, r_upper, r_lower, sh_idx, sl_idx):
-    """Build a metadata dict for one detection."""
+                 window, cr, r_upper, r_lower, sh_idx, sl_idx, atr_i):
+    """Build a metadata dict for one detection, including touch statistics."""
     start = i - window
-    # Store absolute DataFrame indices and prices for each pivot
-    # so the notebook can mark them on the chart.
-    highs = df["High"].values
-    lows = df["Low"].values
+    highs = df["High"].values[start:i]
+    lows = df["Low"].values[start:i]
+
+    x = np.arange(window)
+    upper_line = np.polyval(high_coeffs, x)
+    lower_line = np.polyval(low_coeffs, x)
+
+    # Touch counting with 0.3 × ATR tolerance
+    touch_tol = 0.3 * atr_i
+    upper_touches = count_touches(highs, upper_line, touch_tol, side="upper")
+    lower_touches = count_touches(lows, lower_line, touch_tol, side="lower")
+
+    abs_highs = df["High"].values
+    abs_lows = df["Low"].values
     return {
         "event_date": df.index[i],
         "pattern_type": pattern_type,
@@ -193,9 +203,18 @@ def _make_detail(df, i, pattern_type, high_coeffs, low_coeffs,
         "r_lower": round(abs(r_lower), 3),
         "pivot_highs": len(sh_idx),
         "pivot_lows": len(sl_idx),
-        # Absolute indices + prices of every pivot point
+        # Touch statistics
+        "upper_touches": upper_touches["touch_count"],
+        "lower_touches": lower_touches["touch_count"],
+        "upper_touch_indices": [start + j for j in upper_touches["touch_indices"]],
+        "lower_touch_indices": [start + j for j in lower_touches["touch_indices"]],
+        "upper_mean_error": round(upper_touches["mean_error"], 4),
+        "lower_mean_error": round(lower_touches["mean_error"], 4),
+        "upper_violations": upper_touches["violations"],
+        "lower_violations": lower_touches["violations"],
+        # Pivot positions (absolute indices)
         "swing_high_idx": [start + int(j) for j in sh_idx],
-        "swing_high_prices": [float(highs[start + int(j)]) for j in sh_idx],
+        "swing_high_prices": [float(abs_highs[start + int(j)]) for j in sh_idx],
         "swing_low_idx": [start + int(j) for j in sl_idx],
-        "swing_low_prices": [float(lows[start + int(j)]) for j in sl_idx],
+        "swing_low_prices": [float(abs_lows[start + int(j)]) for j in sl_idx],
     }

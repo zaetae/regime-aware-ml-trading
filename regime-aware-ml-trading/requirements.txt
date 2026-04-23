@@ -8,7 +8,9 @@ hmmlearn
 jupyter
 pydot
 graphviz
-pandas
 yfinance
 scipy
 pyyaml
+requests
+reportlab
+nbconvert
