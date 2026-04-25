@@ -179,8 +179,8 @@ def _make_detail(df, i, pattern_type, high_coeffs, low_coeffs,
     upper_line = np.polyval(high_coeffs, x)
     lower_line = np.polyval(low_coeffs, x)
 
-    # Touch counting with 0.3 × ATR tolerance
-    touch_tol = 0.3 * atr_i
+    # Touch counting with 0.15 × ATR tolerance (tight to avoid false marks)
+    touch_tol = 0.15 * atr_i
     upper_touches = count_touches(highs, upper_line, touch_tol, side="upper")
     lower_touches = count_touches(lows, lower_line, touch_tol, side="lower")
 

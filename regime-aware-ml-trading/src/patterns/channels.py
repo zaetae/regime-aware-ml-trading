@@ -165,8 +165,8 @@ def detect_channel(df, backcandles=40, brange=15, wind=5,
         if near_upper or near_lower:
             signals.iloc[i] = "channel_up" if sl_u > 0 else "channel_down"
             if return_details:
-                # Touch counting with 0.3 × ATR tolerance
-                touch_tol = 0.3 * atr_i
+                # Touch counting with 0.15 × ATR tolerance (tight to avoid false marks)
+                touch_tol = 0.15 * atr_i
                 upper_touches = count_touches(highs, upper_line, touch_tol, side="upper")
                 lower_touches = count_touches(lows, lower_line, touch_tol, side="lower")
 

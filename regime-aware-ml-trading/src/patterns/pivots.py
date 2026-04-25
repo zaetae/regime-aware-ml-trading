@@ -103,11 +103,16 @@ def containment_ratio(highs, lows, upper_line, lower_line, tolerance=0.0):
 # -------------------------------------------------------------------
 
 def count_touches(prices, line_values, tolerance, side="upper"):
-    """Count how many bars touch a trendline within tolerance.
+    """Count how many bars genuinely touch a trendline.
 
-    A touch is defined as a bar whose relevant price extreme is within
-    *tolerance* of the line value. For upper lines we check Highs;
-    for lower lines we check Lows.
+    A touch requires three conditions:
+    1. The bar's price extreme is within tolerance of the line.
+    2. The bar is *approaching* the line (not deep inside the channel) —
+       for upper lines the High must be at or above (line - tolerance);
+       slight breaches up to tolerance/2 past the line are allowed.
+    3. The bar is a *local extreme* in a ±1-bar neighbourhood, so
+       consecutive bars in a flat cluster near the line are not all
+       counted as separate touches.
 
     Parameters
     ----------
@@ -116,34 +121,49 @@ def count_touches(prices, line_values, tolerance, side="upper"):
     line_values : np.ndarray
         Trendline values at each bar position (same length as prices).
     tolerance : float
-        Maximum distance to count as a touch (typically 0.2–0.5 × ATR).
+        Maximum distance to count as a touch (use 0.15 × ATR).
     side : str
-        "upper" — prices should approach from below (High near upper line).
-        "lower" — prices should approach from above (Low near lower line).
+        "upper" — High approaching upper line from below.
+        "lower" — Low approaching lower line from above.
 
     Returns
     -------
     dict with keys:
-        touch_count : int — number of bars touching within tolerance.
-        touch_indices : list[int] — bar indices that touch.
-        mean_error : float — mean absolute distance from line at touch points.
-        max_error : float — max absolute distance at touch points.
-        violations : int — bars that breach the line beyond tolerance.
+        touch_count, touch_indices, mean_error, max_error, violations.
     """
     n = min(len(prices), len(line_values))
     prices = prices[:n]
     line_values = line_values[:n]
 
     if side == "upper":
-        distance = line_values - prices   # positive = inside channel
+        # signed_dist > 0 means price is below the line (inside)
+        signed_dist = line_values - prices
     else:
-        distance = prices - line_values   # positive = inside channel
+        # signed_dist > 0 means price is above the line (inside)
+        signed_dist = prices - line_values
 
-    abs_dist = np.abs(distance)
-    touch_mask = abs_dist <= tolerance
-    violation_mask = distance < -tolerance  # breached beyond tolerance
+    abs_dist = np.abs(signed_dist)
 
-    touch_idx = list(np.where(touch_mask)[0])
+    # Condition 1+2: price extreme is close to the line AND approaching it.
+    # Allow the wick to be anywhere from (tolerance/2 past the line)
+    # to (tolerance below the line).
+    near_mask = (signed_dist >= -tolerance * 0.5) & (signed_dist <= tolerance)
+
+    # Condition 3: local extreme — bar's price is the most extreme
+    # (highest High for upper, lowest Low for lower) in a ±1-bar window.
+    local_ext = np.zeros(n, dtype=bool)
+    for i in range(n):
+        lo = max(0, i - 1)
+        hi = min(n, i + 2)
+        if side == "upper":
+            local_ext[i] = prices[i] >= prices[lo:hi].max() - 1e-9
+        else:
+            local_ext[i] = prices[i] <= prices[lo:hi].min() + 1e-9
+
+    touch_mask = near_mask & local_ext
+    violation_mask = signed_dist < -tolerance
+
+    touch_idx = list(np.nonzero(touch_mask)[0])
     touch_errors = abs_dist[touch_mask]
 
     return {
