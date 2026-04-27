@@ -214,6 +214,83 @@ def feature_importance_table(clf, feature_names, top_n=20):
 
 
 # ------------------------------------------------------------------
+# Walk-forward cross-validation
+# ------------------------------------------------------------------
+
+def walk_forward_cv(features, labels, labeled_df,
+                    n_splits=5, min_train_frac=0.30,
+                    n_estimators=200, max_depth=8, random_state=42):
+    """Expanding-window walk-forward cross-validation.
+
+    Splits the chronologically ordered events into ``n_splits`` folds.
+    For fold *k*, training uses all events up to fold *k*, and testing
+    uses fold *k+1*.  The training window grows with each fold.
+
+    Returns
+    -------
+    dict with per-fold and aggregate results.
+    """
+    dates = pd.DatetimeIndex(labeled_df["event_date"])
+    sort_idx = dates.argsort()
+    features = features.iloc[sort_idx].reset_index(drop=True).fillna(0)
+    labels = labels.iloc[sort_idx].reset_index(drop=True)
+    dates = dates[sort_idx]
+
+    n = len(features)
+    fold_size = n // (n_splits + 1)
+    if fold_size < 5:
+        return None  # too few events for meaningful CV
+
+    fold_results = []
+    for k in range(n_splits):
+        train_end = fold_size * (k + 1)
+        test_start = train_end
+        test_end = min(train_end + fold_size, n)
+        if test_end <= test_start or train_end < int(n * min_train_frac):
+            continue
+
+        X_tr = features.iloc[:train_end]
+        y_tr = labels.iloc[:train_end]
+        X_te = features.iloc[test_start:test_end]
+        y_te = labels.iloc[test_start:test_end]
+
+        if len(y_te.unique()) < 2:
+            continue
+
+        rf = train_random_forest(X_tr, y_tr, n_estimators=n_estimators,
+                                 max_depth=max_depth, random_state=random_state)
+        baseline = train_baseline(X_tr, y_tr, random_state=random_state)
+
+        rf_res = evaluate_model(rf, X_te, y_te, f"RF fold-{k}")
+        base_res = evaluate_model(baseline, X_te, y_te, f"Base fold-{k}")
+
+        fold_results.append({
+            "fold": k,
+            "train_size": len(X_tr),
+            "test_size": len(X_te),
+            "train_end_date": dates[train_end - 1],
+            "test_end_date": dates[test_end - 1],
+            "rf_accuracy": rf_res["accuracy"],
+            "rf_f1_macro": rf_res["f1_macro"],
+            "base_accuracy": base_res["accuracy"],
+            "base_f1_macro": base_res["f1_macro"],
+        })
+
+    if not fold_results:
+        return None
+
+    wf_df = pd.DataFrame(fold_results)
+    return {
+        "folds": wf_df,
+        "rf_mean_acc": round(wf_df["rf_accuracy"].mean(), 4),
+        "rf_mean_f1": round(wf_df["rf_f1_macro"].mean(), 4),
+        "base_mean_acc": round(wf_df["base_accuracy"].mean(), 4),
+        "base_mean_f1": round(wf_df["base_f1_macro"].mean(), 4),
+        "n_folds": len(fold_results),
+    }
+
+
+# ------------------------------------------------------------------
 # Full training pipeline
 # ------------------------------------------------------------------
 
@@ -267,6 +344,11 @@ def run_training_pipeline(features, labels, labeled_df,
     rf_fi = feature_importance_table(rf, feature_names)
     bag_fi = feature_importance_table(bag, feature_names)
 
+    # Walk-forward cross-validation
+    wf = walk_forward_cv(features, labels, labeled_df,
+                         n_splits=5, n_estimators=n_estimators,
+                         max_depth=max_depth, random_state=random_state)
+
     return {
         "split": split,
         "models": {"rf": rf, "bagging": bag, "baseline": baseline},
@@ -275,6 +357,7 @@ def run_training_pipeline(features, labels, labeled_df,
         "tree_stats": {"rf": rf_trees, "bagging": bag_trees},
         "feature_importance": {"rf": rf_fi, "bagging": bag_fi},
         "feature_names": feature_names,
+        "walk_forward": wf,
         "hyperparams": {
             "n_estimators": n_estimators,
             "max_depth": max_depth,

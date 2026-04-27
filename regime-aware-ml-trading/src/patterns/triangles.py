@@ -184,6 +184,12 @@ def _make_detail(df, i, pattern_type, high_coeffs, low_coeffs,
     upper_touches = count_touches(highs, upper_line, touch_tol, side="upper")
     lower_touches = count_touches(lows, lower_line, touch_tol, side="lower")
 
+    # ── Confidence score ──
+    touch_score = min((upper_touches["touch_count"] + lower_touches["touch_count"]) / 8.0, 1.0)
+    cont_score = min(max((cr - 0.6) / 0.4, 0.0), 1.0)
+    r_score = min(abs(r_upper), abs(r_lower))  # worst r as a 0-1 score
+    conf = round((0.35 * touch_score + 0.30 * cont_score + 0.35 * r_score) * 100, 1)
+
     abs_highs = df["High"].values
     abs_lows = df["Low"].values
     return {
@@ -201,6 +207,7 @@ def _make_detail(df, i, pattern_type, high_coeffs, low_coeffs,
         "containment_ratio": round(cr, 3),
         "r_upper": round(abs(r_upper), 3),
         "r_lower": round(abs(r_lower), 3),
+        "confidence": conf,
         "pivot_highs": len(sh_idx),
         "pivot_lows": len(sl_idx),
         # Touch statistics

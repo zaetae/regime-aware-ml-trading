@@ -117,15 +117,23 @@ def build_feature_matrix(df, exclude_patterns=None,
     # Step 6: Event type dummies
     type_dummies = _event_type_dummies(labeled)
 
-    # Step 7: Event-level features from the labeled DataFrame
+    # Step 7: Event-level features from the labeled DataFrame.
+    # NOTE: entry_price is NOT included — it is a proxy for time (SPY
+    # trends upward) and would leak temporal information into the model.
+    # event_atr is kept because it captures current volatility regime.
     event_meta = pd.DataFrame({
-        "entry_price": labeled["entry_price"].values,
         "event_atr": labeled["atr"].values,
     })
 
     # Combine all feature groups
     features = pd.concat([bar_features, geo_features, type_dummies, event_meta],
                          axis=1)
+
+    # Drop absolute SMA values — they trend with price and are time proxies.
+    # The _dist (relative distance) versions are kept.
+    abs_sma_cols = [c for c in features.columns
+                    if c.startswith("sma_") and "_dist" not in c]
+    features = features.drop(columns=abs_sma_cols, errors="ignore")
 
     # Drop any columns that are all NaN
     features = features.dropna(axis=1, how="all")

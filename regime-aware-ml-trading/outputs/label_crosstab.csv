@@ -1,11 +1,11 @@
 event_type,long,no_trade,short,All
 ascending_triangle,0,0,2,2
-channel_down,18,19,11,48
-channel_up,18,17,16,51
+channel_down,4,2,1,7
+channel_up,2,0,3,5
 descending_triangle,1,0,0,1
-multiple_bottom,24,11,16,51
+multiple_bottom,24,12,17,53
 multiple_top,5,2,2,9
 near_resistance,14,11,11,36
-near_support,3,0,1,4
+near_support,3,0,2,5
 symmetric_triangle,5,9,5,19
-All,88,69,64,221
+All,58,36,43,137

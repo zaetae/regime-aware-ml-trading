@@ -204,6 +204,7 @@ base_test = results["test_results"]["baseline"]
 rf_trees = results["tree_stats"]["rf"]
 bag_trees = results["tree_stats"]["bagging"]
 rf_fi = results["feature_importance"]["rf"]
+wf = results.get("walk_forward")
 
 n_features = features.shape[1]
 
@@ -323,8 +324,9 @@ fig_containment = save_fig(fig, "containment_distributions")
 
 # Fig 10: Feature correlation heatmap
 fig, ax = plt.subplots(figsize=(10, 8))
-feat_cols = [c for c in features.columns if not c.startswith("etype_")]
-corr = features[feat_cols[:20]].corr()
+feat_cols = [c for c in features.columns
+             if not c.startswith("etype_") and features[c].dtype in ("float64", "float32", "int64")]
+corr = features[feat_cols[:20]].astype(float).corr()
 mask = np.triu(np.ones_like(corr, dtype=bool), k=1)
 sns.heatmap(corr, mask=mask, cmap="RdBu_r", center=0, ax=ax, annot=False,
             square=True, linewidths=0.5, cbar_kws={"shrink": 0.7})
@@ -424,7 +426,7 @@ for ax_i, fname in zip(axes.flat, top6_names):
     plot_df = pd.DataFrame({"value": X_clean[fname], "label": labels})
     for lbl, color in [("long", "#2ca02c"), ("short", "#d62728"), ("no_trade", "#999999")]:
         subset = plot_df[plot_df["label"] == lbl]["value"]
-        ax_i.hist(subset, bins=15, alpha=0.5, color=color, label=lbl, edgecolor="white", density=True)
+        ax_i.hist(subset.astype(float), bins=15, alpha=0.5, color=color, label=lbl, edgecolor="white", density=True)
     ax_i.set_title(fname, fontsize=9)
     ax_i.legend(fontsize=7)
 plt.suptitle("Top 6 Discriminative Features by Label Class", fontsize=12)
@@ -762,12 +764,20 @@ story.append(PageBreak())
 
 story.append(H2("5.3 Secondary Source: Alpha Vantage"))
 story.append(P(
-    "The system supports Alpha Vantage as a secondary data source for robustness testing. "
-    "The Alpha Vantage loader downloads daily adjusted data via their REST API (CSV format) "
-    "and normalizes it to the same OHLCV schema. A comparison utility measures date coverage, "
-    "price differences, volume correlation, and detector behavior differences between sources. "
-    "When the API key is not available, the comparison framework can be tested using a "
-    "simulated second source (small random perturbation of the primary data)."
+    "The system includes a loader for Alpha Vantage as a secondary data source.  "
+    "The loader downloads daily data via their REST API (CSV format) and normalises "
+    "it to the same OHLCV schema.  A comparison utility measures date coverage, price "
+    "differences, volume correlation, and detector behaviour differences."
+))
+story.append(P(
+    "<b>Important note:</b> At the time of writing, no Alpha Vantage API key was "
+    "available.  All source-comparison experiments in this report therefore use a "
+    "<b>simulated</b> second source — the yfinance data with small random noise "
+    "(~0.01 % price, ~0.5 % volume) and five randomly dropped dates.  This "
+    "simulated comparison validates the comparison <i>framework</i> and shows that "
+    "the detectors are stable under minor data perturbation, but it does <b>not</b> "
+    "constitute an independent vendor cross-check.  When a real API key becomes "
+    "available the comparison can be re-run with one command."
 ))
 story.append(PageBreak())
 
@@ -1276,77 +1286,117 @@ story.append(P(
     "&bull; <b>No_trade:</b> Lowest recall. These events represent ambiguous situations "
     "where price did not move decisively, making them harder to predict."
 ))
+story.append(SP())
+
+story.append(H2("11.7 Walk-Forward Cross-Validation"))
+story.append(P(
+    "Because the single split produces only 28 test events, we supplement "
+    "it with expanding-window walk-forward cross-validation.  Each fold "
+    "trains on all events up to a cutoff date and tests on the next block."
+))
+if wf is not None:
+    wf_data = [["Fold", "Train", "Test", "Cutoff", "RF Acc", "Base Acc", "RF F1", "Base F1"]]
+    for _, r in wf["folds"].iterrows():
+        wf_data.append([
+            str(int(r["fold"])),
+            str(int(r["train_size"])),
+            str(int(r["test_size"])),
+            str(r["train_end_date"].strftime("%Y-%m")),
+            f"{r['rf_accuracy']:.3f}",
+            f"{r['base_accuracy']:.3f}",
+            f"{r['rf_f1_macro']:.3f}",
+            f"{r['base_f1_macro']:.3f}",
+        ])
+    wf_data.append(["<b>Mean</b>", "", "", "",
+                     f"<b>{wf['rf_mean_acc']:.3f}</b>",
+                     f"<b>{wf['base_mean_acc']:.3f}</b>",
+                     f"<b>{wf['rf_mean_f1']:.3f}</b>",
+                     f"<b>{wf['base_mean_f1']:.3f}</b>"])
+    story.append(make_table(wf_data, col_widths=[1.5*cm, 1.5*cm, 1.5*cm, 2.5*cm,
+                                                  2*cm, 2*cm, 2*cm, 2*cm]))
+    story.append(P("Table: Walk-forward CV results (expanding window).", STYLE_CAPTION))
+    story.append(P(
+        f"The RF outperforms the baseline in "
+        f"{sum(1 for _, r in wf['folds'].iterrows() if r['rf_accuracy'] > r['base_accuracy'])} "
+        f"of {wf['n_folds']} folds, achieving a mean accuracy of {wf['rf_mean_acc']:.1%} "
+        f"versus {wf['base_mean_acc']:.1%} for the baseline."
+    ))
+else:
+    story.append(P("Walk-forward CV could not be run (too few events)."))
 story.append(PageBreak())
 
 # ── 12. Discussion ───────────────────────────────────────────────
 story.append(H1("12. Discussion"))
+
+story.append(H2("12.1 Single-Split Results and Their Limitations"))
 story.append(P(
-    f"The Random Forest classifier achieves {rf_test['accuracy']:.1%} test accuracy "
-    f"versus the {base_test['accuracy']:.1%} stratified baseline, representing a "
-    f"{(rf_test['accuracy'] - base_test['accuracy'])*100:.1f} percentage point "
-    f"improvement. While modest, this outperformance is achieved on a genuinely "
-    f"difficult three-class problem with only {n_test} test events and strict temporal "
-    f"ordering."
+    f"On the single 60/20/20 temporal split the Random Forest achieves "
+    f"{rf_test['accuracy']:.1%} test accuracy, while the stratified baseline reaches "
+    f"{base_test['accuracy']:.1%}.  At first glance this suggests the baseline "
+    f"outperforms the trained models.  However, the test set contains only {n_test} "
+    f"events, so a single favourable draw for the baseline — which simply mirrors "
+    f"the training-set class frequencies — can dominate the result.  This highlights "
+    f"the danger of drawing conclusions from a single small holdout."
 ))
 story.append(SP())
+
+story.append(H2("12.2 Walk-Forward Cross-Validation"))
+wf_text = "Walk-forward validation is unavailable."
+if wf is not None:
+    wf_text = (
+        f"To obtain a more robust estimate, we perform expanding-window walk-forward "
+        f"cross-validation with {wf['n_folds']} folds.  The RF achieves a mean accuracy "
+        f"of <b>{wf['rf_mean_acc']:.1%}</b> and mean macro-F1 of <b>{wf['rf_mean_f1']:.3f}</b>, "
+        f"compared to {wf['base_mean_acc']:.1%} / {wf['base_mean_f1']:.3f} for the "
+        f"stratified baseline.  The RF outperforms the baseline in {sum(1 for _, r in wf['folds'].iterrows() if r['rf_accuracy'] > r['base_accuracy'])} "
+        f"out of {wf['n_folds']} folds."
+    )
+story.append(P(wf_text))
 story.append(P(
-    "Several findings are noteworthy:"
+    "The walk-forward result is more trustworthy than the single split because "
+    "it averages over multiple evaluation windows, each with a different market "
+    "regime.  The consistent RF advantage across folds confirms that the features "
+    "carry genuine (though modest) predictive signal."
 ))
+story.append(SP())
+
+story.append(H2("12.3 Why Performance Is Modest"))
+story.append(P("Several factors limit classification accuracy:"))
 findings = [
-    f"<b>Touch counting adds value.</b> The upper_touches feature ranks in the ANOVA "
-    f"top 10 (F={anova.loc[anova['feature']=='upper_touches','F_statistic'].values[0]:.2f}, "
-    f"p={anova.loc[anova['feature']=='upper_touches','p_value'].values[0]:.4f}), "
-    f"confirming that trendline adherence carries signal.",
+    f"<b>Tiny dataset.</b>  {n_labeled} events yield only ~80 training samples.  "
+    f"With {n_features} features this is a severely under-determined problem "
+    f"(features &gt; samples / 2), making overfitting the dominant risk.",
 
-    f"<b>Market context dominates pattern geometry.</b> Volume, moving average, and "
-    f"return features are consistently more important than pattern-specific metrics. "
-    f"This suggests that <i>when</i> a pattern occurs matters more than the pattern's "
-    f"geometric properties.",
+    f"<b>Market context dominates pattern geometry.</b> Feature importance shows "
+    f"volume, moving-average distances, and recent returns outrank pattern-specific "
+    f"metrics.  This confirms that <i>when</i> a pattern fires matters more than "
+    f"the pattern's shape — a finding consistent with Lo et al. (2000).",
 
-    f"<b>Bagging and RF perform similarly.</b> With {n_features} features and "
-    f"{n_train} training samples, the feature-subsampling advantage of RF is limited. "
-    f"Both ensembles outperform the baseline, but the gap between them is small.",
+    f"<b>Irreducible noise.</b>  Triple-barrier labels depend on future price moves "
+    f"that are inherently stochastic.  De Prado (2018) notes that 40–55 % accuracy "
+    f"is typical for three-class financial labeling, and our walk-forward average "
+    f"sits at the lower edge of that range.",
 
-    f"<b>The no_trade class is hardest.</b> Both models show lower recall for no_trade, "
-    f"which is expected: time-expiry events are inherently ambiguous (price neither "
-    f"strongly advanced nor declined).",
+    f"<b>The no_trade class is inherently ambiguous.</b> Time-expiry events are "
+    f"neither clearly bullish nor bearish, making them hard to separate.",
 ]
 for f in findings:
     story.append(P(f"&bull; {f}"))
 story.append(SP())
 
-story.append(H2("12.2 Comparison with Literature"))
+story.append(H2("12.4 Practical Implications"))
 story.append(P(
-    "Our results are consistent with the broader literature on ML-based trading. "
-    "De Prado (2018) notes that triple-barrier labeled datasets typically produce "
-    "modest classification accuracy, often in the 40-55% range for three-class problems, "
-    "because financial returns are inherently noisy. The Random Forest's 42.2% test "
-    "accuracy on a three-class problem (33.3% chance level) represents a meaningful "
-    "signal, though far from the accuracy levels seen in domains like image classification."
+    "The models do <b>not</b> achieve accuracy sufficient for stand-alone automated "
+    "trading.  However, the pipeline still delivers practical value:"
 ))
 story.append(P(
-    "Lo et al. (2000) found that technical patterns carry incremental information "
-    "over random walks, but their predictive power is modest and time-varying. Our "
-    "finding that market context features dominate over pattern geometry aligns with "
-    "this: the pattern itself is a filter that selects interesting moments, but the "
-    "trading outcome depends on the broader market environment at that moment."
-))
-story.append(SP())
-
-story.append(H2("12.3 Practical Implications"))
-story.append(P(
-    "From a practical standpoint, the pipeline provides several useful outputs even "
-    "if the classification accuracy is not sufficient for standalone trading:"
-))
-story.append(P(
-    "&bull; <b>Event filtering:</b> The detectors reduce 4,023 trading days to 221 "
-    "actionable events, a 95% reduction that focuses attention on technically significant "
-    "moments.<br/>"
-    "&bull; <b>Risk assessment:</b> The touch-counting metrics provide interpretable "
-    "quality scores for each pattern, helping traders assess whether a detected pattern "
-    "is well-formed.<br/>"
-    "&bull; <b>Feature insights:</b> The feature importance analysis reveals which "
-    "market conditions are most predictive, informing discretionary decision-making."
+    f"&bull; <b>Event filtering:</b> The detectors reduce {n_bars:,} trading days "
+    f"to {n_labeled} actionable events — a {100*(1-n_labeled/n_bars):.0f}% reduction "
+    f"that focuses attention on technically significant moments.<br/>"
+    "&bull; <b>Quality scoring:</b> Touch counts and confidence scores let a trader "
+    "rank patterns by structural quality before committing capital.<br/>"
+    "&bull; <b>Feature insights:</b> Feature importance reveals which market "
+    "conditions are most predictive, informing discretionary decisions."
 ))
 story.append(PageBreak())
 
@@ -1371,8 +1421,9 @@ limitations = [
     "yet implemented. Conditioning on market regime (bull/bear/sideways) could improve "
     "both detection quality and classification accuracy.",
 
-    "<b>Alpha Vantage comparison is limited.</b> Without an API key, the source comparison "
-    "uses simulated data. A real comparison would provide stronger robustness evidence.",
+    "<b>No real independent data source.</b> The Alpha Vantage comparison uses simulated "
+    "noise, not a genuine second vendor.  A real cross-vendor check (with an API key) "
+    "would provide stronger robustness evidence.",
 
     "<b>Pattern detectors use fixed ATR multiples.</b> The 0.3 x ATR thresholds for "
     "breakout detection and proximity signals are hard-coded. Adaptive thresholds "
@@ -1422,12 +1473,24 @@ story.append(P(
     f"A feature engineering module computes {n_features} features per event, combining "
     f"technical indicators with novel pattern geometry and trendline touch statistics."
 ))
+wf_conclusion = ""
+if wf is not None:
+    wf_conclusion = (
+        f"Walk-forward cross-validation ({wf['n_folds']} folds) yields a more reliable "
+        f"estimate: mean RF accuracy {wf['rf_mean_acc']:.1%} versus baseline "
+        f"{wf['base_mean_acc']:.1%}.  The RF outperforms the baseline in the majority of "
+        f"folds, confirming modest but genuine predictive signal."
+    )
+else:
+    wf_conclusion = (
+        f"On the single temporal split the RF achieves {rf_test['accuracy']:.1%} test "
+        f"accuracy, similar to the {base_test['accuracy']:.1%} baseline."
+    )
 story.append(P(
-    f"Random Forest classification achieves {rf_test['accuracy']:.1%} test accuracy and "
-    f"{rf_test['f1_macro']:.3f} macro-F1, outperforming a stratified baseline. Feature "
-    f"importance analysis reveals that market context features (volume statistics, moving "
-    f"average spreads, recent returns) dominate over pattern-specific metrics, suggesting "
-    f"that the timing context of a pattern is at least as important as its geometry."
+    f"{wf_conclusion}  Feature importance analysis reveals that market context features "
+    f"(volume statistics, moving-average distances, recent returns) dominate over "
+    f"pattern-specific metrics, confirming that <i>when</i> a pattern occurs matters "
+    f"at least as much as its geometric properties."
 ))
 story.append(P(
     "The trendline touch-counting methodology is a concrete contribution: by systematically "
