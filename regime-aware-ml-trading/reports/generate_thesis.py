@@ -43,7 +43,7 @@ from src.features.build_features import build_feature_matrix
 from src.features.indicators import compute_all_indicators
 from src.models.train import (
     run_training_pipeline, feature_importance_table,
-    tree_complexity_stats
+    tree_complexity_stats, individual_tree_diagnostics
 )
 
 # ── Output paths ─────────────────────────────────────────────────
@@ -198,13 +198,22 @@ tri_cont_avg = np.mean([d["containment_ratio"] for d in tri_details])
 ch_touches_avg = np.mean([d["upper_touches"]+d["lower_touches"] for d in ch_details])
 ch_cont_avg = np.mean([d["containment_ratio"] for d in ch_details])
 
+rf_train = results["train_results"]["rf"]
+bag_train = results["train_results"]["bagging"]
+base_train = results["train_results"]["baseline"]
+rf_val = results["val_results"]["rf"]
+bag_val = results["val_results"]["bagging"]
+base_val = results["val_results"]["baseline"]
 rf_test = results["test_results"]["rf"]
 bag_test = results["test_results"]["bagging"]
 base_test = results["test_results"]["baseline"]
 rf_trees = results["tree_stats"]["rf"]
 bag_trees = results["tree_stats"]["bagging"]
+rf_tree_diag = results.get("tree_diagnostics", {}).get("rf")
+bag_tree_diag = results.get("tree_diagnostics", {}).get("bagging")
 rf_fi = results["feature_importance"]["rf"]
 wf = results.get("walk_forward")
+kfold = results.get("kfold_cv")
 
 n_features = features.shape[1]
 
@@ -247,7 +256,7 @@ for i, v in enumerate(lbl_vals):
     ax.text(i, v + 1, str(v), ha="center", fontsize=10)
 fig_labels = save_fig(fig, "label_distribution")
 
-# Fig 4: Confusion matrix (RF test)
+# Fig 4: Confusion matrices (test set)
 from sklearn.metrics import ConfusionMatrixDisplay
 fig, axes = plt.subplots(1, 3, figsize=(14, 4))
 for ax_i, (name, res) in zip(axes, [("Random Forest", rf_test), ("Bagging", bag_test), ("Baseline", base_test)]):
@@ -256,6 +265,39 @@ for ax_i, (name, res) in zip(axes, [("Random Forest", rf_test), ("Bagging", bag_
 fig.suptitle("Confusion Matrices (Test Set)")
 plt.tight_layout()
 fig_cm = save_fig(fig, "confusion_matrices")
+
+# Fig 4b: Confusion matrices (train set — for overfitting analysis)
+fig, axes = plt.subplots(1, 3, figsize=(14, 4))
+for ax_i, (name, res) in zip(axes, [("Random Forest", rf_train), ("Bagging", bag_train), ("Baseline", base_train)]):
+    ConfusionMatrixDisplay(res["confusion_matrix"], display_labels=res["labels"]).plot(ax=ax_i, cmap="Greens", colorbar=False)
+    ax_i.set_title(name, fontsize=10)
+fig.suptitle("Confusion Matrices (Training Set)")
+plt.tight_layout()
+fig_cm_train = save_fig(fig, "confusion_matrices_train")
+
+# Fig 4c: Individual tree accuracy histograms
+fig_tree_diag = None
+if rf_tree_diag and bag_tree_diag:
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+    axes[0].hist(rf_tree_diag["tree_accuracies"], bins=20, color="#1f77b4", edgecolor="white", alpha=0.8)
+    axes[0].axvline(rf_tree_diag["ensemble_accuracy"], color="red", linestyle="--",
+                     label=f"Ensemble: {rf_tree_diag['ensemble_accuracy']:.1%}")
+    axes[0].axvline(rf_tree_diag["mean_tree_accuracy"], color="orange", linestyle="--",
+                     label=f"Mean tree: {rf_tree_diag['mean_tree_accuracy']:.1%}")
+    axes[0].set_title("Random Forest")
+    axes[0].set_xlabel("Individual Tree Accuracy")
+    axes[0].legend(fontsize=8)
+    axes[1].hist(bag_tree_diag["tree_accuracies"], bins=20, color="#ff7f0e", edgecolor="white", alpha=0.8)
+    axes[1].axvline(bag_tree_diag["ensemble_accuracy"], color="red", linestyle="--",
+                     label=f"Ensemble: {bag_tree_diag['ensemble_accuracy']:.1%}")
+    axes[1].axvline(bag_tree_diag["mean_tree_accuracy"], color="orange", linestyle="--",
+                     label=f"Mean tree: {bag_tree_diag['mean_tree_accuracy']:.1%}")
+    axes[1].set_title("Bagging")
+    axes[1].set_xlabel("Individual Tree Accuracy")
+    axes[1].legend(fontsize=8)
+    plt.suptitle("Individual Tree vs Ensemble Accuracy (Test Set)")
+    plt.tight_layout()
+    fig_tree_diag = save_fig(fig, "tree_diagnostics")
 
 # Fig 5: Feature importance
 fig, ax = plt.subplots(figsize=(8, 5))
@@ -444,6 +486,49 @@ ax.axvline(np.mean(ch_widths), color="red", linestyle="--", label=f"Mean: {np.me
 ax.legend()
 fig_ch_width = save_fig(fig, "channel_width")
 
+# Fig 18: Walk-forward CV bar chart
+fig_wf = None
+if wf is not None:
+    fig, ax = plt.subplots(figsize=(8, 4))
+    wf_folds = wf["folds"]
+    x = np.arange(len(wf_folds))
+    w = 0.35
+    ax.bar(x - w/2, wf_folds["rf_accuracy"], w, label="Random Forest", color="#1f77b4")
+    ax.bar(x + w/2, wf_folds["base_accuracy"], w, label="Baseline", color="#aaaaaa")
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"Fold {int(r)}" for r in wf_folds["fold"]])
+    ax.set_ylabel("Accuracy")
+    ax.set_title("Walk-Forward CV: RF vs Baseline per Fold")
+    ax.legend()
+    ax.axhline(wf["rf_mean_acc"], color="#1f77b4", linestyle="--", alpha=0.5)
+    ax.axhline(wf["base_mean_acc"], color="#aaaaaa", linestyle="--", alpha=0.5)
+    ax.set_ylim(0, 0.6)
+    for i, (rf_a, b_a) in enumerate(zip(wf_folds["rf_accuracy"], wf_folds["base_accuracy"])):
+        ax.text(i - w/2, rf_a + 0.01, f"{rf_a:.0%}", ha="center", fontsize=8)
+        ax.text(i + w/2, b_a + 0.01, f"{b_a:.0%}", ha="center", fontsize=8)
+    fig_wf = save_fig(fig, "walk_forward_cv")
+
+# Fig: 5-fold event-level CV bar chart
+fig_kfold = None
+if kfold is not None:
+    fig, ax = plt.subplots(figsize=(8, 4))
+    kf_folds = kfold["folds"]
+    x = np.arange(len(kf_folds))
+    w = 0.35
+    ax.bar(x - w/2, kf_folds["rf_accuracy"], w, label="Random Forest", color="#1f77b4")
+    ax.bar(x + w/2, kf_folds["base_accuracy"], w, label="Baseline", color="#aaaaaa")
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"Fold {int(r)}" for r in kf_folds["fold"]])
+    ax.set_ylabel("Accuracy")
+    ax.set_title("5-Fold Event-Level CV: RF vs Baseline")
+    ax.legend()
+    ax.axhline(kfold["rf_mean_acc"], color="#1f77b4", linestyle="--", alpha=0.5)
+    ax.set_ylim(0, 0.7)
+    for i, (rf_a, b_a) in enumerate(zip(kf_folds["rf_accuracy"], kf_folds["base_accuracy"])):
+        ax.text(i - w/2, rf_a + 0.01, f"{rf_a:.0%}", ha="center", fontsize=8)
+        ax.text(i + w/2, b_a + 0.01, f"{b_a:.0%}", ha="center", fontsize=8)
+    fig_kfold = save_fig(fig, "kfold_cv")
+
 # Compute additional stats for expanded sections
 daily_ret_stats = daily_ret.describe()
 monthly_counts = event_rows.groupby(event_rows.index.to_period("M")).size()
@@ -518,7 +603,9 @@ story.append(P(
     f"and touch-counting statistics. Random Forest and Bagging classifiers are trained "
     f"using a strict temporal split to avoid lookahead bias. The Random Forest achieves "
     f"{rf_test['accuracy']:.1%} test accuracy and {rf_test['f1_macro']:.3f} macro-F1, "
-    f"outperforming a stratified baseline ({base_test['accuracy']:.1%} accuracy). "
+    f"Walk-forward cross-validation across {wf['n_folds'] if wf else 'N/A'} temporal folds "
+    f"shows the Random Forest consistently outperforms the stratified baseline "
+    f"({wf['rf_mean_acc']:.1%} vs {wf['base_mean_acc']:.1%} mean accuracy). "
     f"Key discriminative features include recent returns, moving average distances, and "
     f"volume statistics. The project demonstrates a transparent, modular, and "
     f"reproducible approach to ML-based trading signal classification."
@@ -707,7 +794,7 @@ nb_data = [
     ["05_triple_barrier_labeling", "Labeling pipeline and sensitivity analysis"],
     ["06_channel_gallery", "Channel detection gallery"],
     ["07_data_source_comparison", "yfinance vs Alpha Vantage comparison"],
-    ["08_detector_touch_analysis", "Trendline touch counting validation"],
+    ["08_detector_validation", "All detectors: dual-source, touches, confusion matrices"],
     ["09_feature_engineering", "Feature computation and analysis"],
     ["10_model_training", "RF and Bagging training with full evaluation"],
     ["11_experiment_summary", "Consolidated results and statistics"],
@@ -831,16 +918,33 @@ story.append(SP())
 
 story.append(H2("6.3 Channel Detection"))
 story.append(P(
-    "Channels are detected using the chunk-based method from the TrendLineChannelDetection "
-    "reference notebook. The lookback window is dynamically optimized: 31 windows "
-    "(25-55 bars) are tested, and the one producing the tightest channel at the current "
-    "bar is selected. Each window is divided into 5-bar chunks; the max-High and min-Low "
-    "from each chunk are used as representative points for polyfit(degree=1)."
+    "Channels follow the TrendLineChannelDetection reference notebook.  "
+    "The lookback window is dynamically optimised: 31 candidate windows "
+    "(25-55 bars) are tested and the one producing the <b>tightest</b> "
+    "channel at the current bar is kept.  Each window is divided into "
+    "5-bar chunks; the max-High and min-Low from each chunk serve as "
+    "representative points for <i>polyfit(degree=1)</i>.  Intercepts are "
+    "adjusted to <b>wrap</b> all chunk extremes (upper line caps all highs, "
+    "lower line floors all lows), following reference cell-7."
 ))
 story.append(P(
-    "Validation requires: parallel slopes (relative difference < 25%, same sign), "
-    "width between 1-6 x ATR, and containment >= 60%. A signal fires when the current "
-    "Close is within 0.3 x ATR of either boundary."
+    "After fitting, the channel undergoes multi-stage validation: "
+    "(1) parallelism — slopes must have the same sign and a relative "
+    "difference &lt; 25 %; "
+    "(2) width — mean channel width must be 1-6 x ATR; "
+    f"(3) containment — at least {int(0.70*100)} % of bars must lie inside the channel; "
+    "(4) <b>minimum swing-pivot touches</b> — at least 2 upper touches and "
+    "3 lower touches counted among real swing highs/lows within 0.20 x ATR of each "
+    "line; "
+    "(5) <b>rejection confirmation</b> — the signal bar's close should move away "
+    "from the touched boundary (if not, a 20 % confidence penalty is applied rather "
+    "than discarding the detection)."
+))
+story.append(P(
+    "A <b>confidence score</b> (0-100 %) is computed from four components: "
+    "touch count (40 % weight), containment (25 %), parallelism (20 %), "
+    "and width quality (15 %).  This score lets downstream analysis rank "
+    "channels by structural quality."
 ))
 story.append(SP())
 
@@ -853,7 +957,27 @@ story.append(P(
 ))
 story.append(SP())
 
-story.append(H2("6.5 Detection Overview"))
+story.append(H2("6.5 Signal Localization"))
+story.append(P(
+    "Each detector selects a specific <b>signal bar</b> where the detection event is "
+    "placed.  When visualised as a yellow diamond on charts, the diamond is plotted at "
+    "the <b>Close price of the detected event bar</b>.  The selection rule differs by "
+    "detector:"
+))
+story.append(P(
+    "&bull; <b>Channels:</b> the boundary-interaction bar — the bar whose High/Low "
+    "is within 0.3 x ATR of the upper/lower channel line.<br/>"
+    "&bull; <b>Triangles:</b> the breakout bar (High/Low exceeds recent range by "
+    "0.3 x ATR), or the descending-triangle upper-test bar (Close within 0.3 x ATR of "
+    "descending upper line).<br/>"
+    "&bull; <b>Support/Resistance:</b> the proximity bar — Close within 0.3 x ATR of "
+    "a stable flat rolling level.<br/>"
+    "&bull; <b>Multiple Tops/Bottoms:</b> the bar where the rolling extreme condition "
+    "coincides with a reversal slope (polyfit over 5 bars) condition."
+))
+story.append(SP())
+
+story.append(H2("6.6 Detection Overview"))
 story.append(P(
     f"Across all four detectors, the system identifies {total_events} event bars out of "
     f"{n_bars:,} total bars, for a combined event rate of {100*total_events/n_bars:.1f}%. "
@@ -885,18 +1009,31 @@ story.append(PageBreak())
 story.append(H1("7. Trendline Touch Analysis"))
 story.append(P(
     "A key contribution of this project is the systematic counting and analysis of "
-    "trendline touches. For each triangle and channel detection, the system counts "
-    "how many bars have their High (for upper lines) or Low (for lower lines) within "
-    "a tolerance of 0.3 x ATR of the fitted trendline."
+    "trendline touches.  For each triangle and channel detection the system counts "
+    "how many bars genuinely interact with the fitted trendlines, using a strict "
+    "three-condition definition."
 ))
 story.append(SP())
 story.append(H2("7.1 Touch Counting Methodology"))
 story.append(P(
-    "A touch is registered when |price_extreme - trendline_value| <= tolerance. For upper "
-    "lines, we measure the distance from each bar's High to the trendline; for lower lines, "
-    "from each bar's Low. A violation is counted when a bar breaches the line beyond "
-    "tolerance. The touch tolerance is set to 0.3 x ATR(14) at the event bar, providing "
-    "an adaptive threshold that accounts for current volatility."
+    "A bar is counted as a touch only if <b>all three</b> conditions hold:"
+))
+story.append(P(
+    "&bull; <b>Proximity:</b> the bar's price extreme (High for upper line, Low for "
+    "lower line) is within 0.15–0.20 x ATR of the trendline value.  This is tight "
+    "enough that every marked touch is visually on the line.<br/>"
+    "&bull; <b>Directionality:</b> the bar must be <i>approaching</i> the line "
+    "from inside the pattern.  Slight breaches up to half the tolerance are permitted, "
+    "but bars deep inside the channel that coincidentally sit near the tolerance "
+    "boundary are excluded.<br/>"
+    "&bull; <b>Local extremeness:</b> the bar must be a local maximum (upper) or "
+    "local minimum (lower) in a ±1-bar neighbourhood.  This prevents consecutive "
+    "bars in a flat cluster from all counting as separate touches."
+))
+story.append(P(
+    "A <b>violation</b> is counted when a bar breaches the trendline beyond tolerance.  "
+    "The <b>mean touch error</b> (average distance at touch points) provides a quality "
+    "metric — lower errors indicate closer adherence."
 ))
 story.append(SP())
 story.append(H2("7.2 Triangle Touch Statistics"))
@@ -991,16 +1128,18 @@ story.append(SP())
 
 story.append(H2("8.1 Barrier Mechanics"))
 story.append(P(
-    "The triple-barrier method works as follows: for each event bar, the entry price is "
-    "the Close of that bar. The upper barrier is set at entry + pt_mult x ATR(14), and "
-    "the lower barrier at entry - sl_mult x ATR(14). The algorithm walks forward through "
-    "subsequent bars, checking whether the bar's High breaches the upper barrier or its "
-    "Low breaches the lower barrier. If neither barrier is breached within max_holding "
-    "bars, the time barrier triggers and the event is labeled no_trade."
+    "The triple-barrier method works as follows:"
 ))
 story.append(P(
-    "When both barriers are breached on the same bar (a wide-range day), the Close is "
-    "used as a tiebreaker: if Close >= entry, the label is long; otherwise short."
+    "&bull; <b>Entry:</b> Close price of the signal bar (the detected event bar).<br/>"
+    "&bull; <b>Profit target (TP):</b> entry + 2.0 x ATR(14) at the event bar.<br/>"
+    "&bull; <b>Stop loss (SL):</b> entry - 2.0 x ATR(14) at the event bar.<br/>"
+    "&bull; <b>Max holding:</b> 10 bars after entry.<br/>"
+    "&bull; <b>Label assignment:</b> the first barrier hit determines the label. "
+    "If the High of a forward bar >= TP, label = long. If the Low <= SL, label = short. "
+    "If neither barrier is hit within 10 bars, label = no_trade.<br/>"
+    "&bull; <b>Same-bar tiebreak:</b> if both barriers are breached on the same bar "
+    "(a wide-range day), the Close is used: long if Close >= entry, short otherwise."
 ))
 story.append(SP())
 
@@ -1049,14 +1188,30 @@ story.append(P(
 story.append(SP())
 feat_groups = [
     ["Group", "Count", "Examples"],
-    ["Trend", "12", "SMA distances, MA spreads (10/50, 20/200, 50/200)"],
-    ["Volatility", "5", "ATR(14), ATR/price, rolling volatility, Bollinger width"],
-    ["Momentum", "10", "RSI(14), MACD, returns (1/5/10/20-day), momentum"],
-    ["Volume", "3", "Volume ratio, volume std, OBV normalized"],
-    ["Pattern Geometry", "12", "Touches, containment, slopes, window, errors"],
-    ["Event Type", "9", "One-hot encoded event type dummies"],
-    ["Event Meta", "2", "Entry price, event ATR"],
+    ["Trend", "8", "SMA distances (relative), MA spreads (10/50, 20/200, 50/200)"],
+    ["Volatility", "3", "ATR/price (atr_ratio), rolling volatility, Bollinger width"],
+    ["Momentum", "10", "RSI(14), normalized MACD, returns (1/5/10/20-day), momentum"],
+    ["Volume", "2", "Volume ratio, volume std"],
+    ["Binary Filters", "8", "BB touches, SMA crossovers, SMA proximity, RSI extremes"],
+    ["Pattern Geometry", "12", "Touches, containment, slopes, window, errors, confidence"],
+    ["Event Type", "~9", "One-hot encoded event type dummies"],
 ]
+story.append(P(
+    "<b>Removed features (trend-leaking):</b> Raw ATR(14) scales with price level "
+    "and leaks time-trend information — replaced by atr_ratio (ATR/Close). "
+    "Raw MACD, macd_signal, and macd_hist were replaced by price-normalized versions "
+    "(macd_norm = MACD/Close, etc.) so values are comparable across different SPY price "
+    "regimes. obv_norm (cumulative on-balance volume) was removed because the cumulative "
+    "sum trends over time. event_atr was removed for the same reason as raw ATR. "
+    "Absolute SMA values and entry_price were already excluded."
+))
+story.append(P(
+    "<b>Added features (binary technical filters):</b> Eight simple binary features "
+    "encode interpretable technical conditions: Bollinger Band touches (upper/lower), "
+    "SMA(50)/SMA(200) crossovers (golden/death cross), Close proximity to SMA(50) and "
+    "SMA(200) within 0.3xATR, and RSI extremes (oversold <= 30, overbought >= 70). "
+    "These add low-complexity interpretable signals without introducing new detectors."
+))
 story.append(make_table(feat_groups, col_widths=[3.5*cm, 1.5*cm, 11*cm]))
 story.append(SP())
 
@@ -1219,6 +1374,32 @@ story.append(H2("11.2 Confusion Matrices"))
 add_figure(story, fig_cm, width=15*cm, caption="Figure 9: Confusion matrices on the test set (RF, Bagging, Baseline).")
 story.append(SP())
 
+story.append(H2("11.2b Training Set Confusion Matrices"))
+story.append(P(
+    "Comparing training-set confusion matrices to validation/test results measures "
+    "overfitting risk. A model that achieves near-perfect training accuracy but poor "
+    "test accuracy is overfitting to training noise rather than learning generalisable "
+    "patterns."
+))
+add_figure(story, fig_cm_train, width=15*cm, caption="Figure 9b: Confusion matrices on the training set.")
+story.append(SP())
+overfit_data = [
+    ["Model", "Train Acc", "Val Acc", "Test Acc", "Train-Test Gap"],
+    ["RF", f"{rf_train['accuracy']:.3f}", f"{rf_val['accuracy']:.3f}",
+     f"{rf_test['accuracy']:.3f}",
+     f"{rf_train['accuracy']-rf_test['accuracy']:.3f}"],
+    ["Bagging", f"{bag_train['accuracy']:.3f}", f"{bag_val['accuracy']:.3f}",
+     f"{bag_test['accuracy']:.3f}",
+     f"{bag_train['accuracy']-bag_test['accuracy']:.3f}"],
+    ["Baseline", f"{base_train['accuracy']:.3f}", f"{base_val['accuracy']:.3f}",
+     f"{base_test['accuracy']:.3f}",
+     f"{base_train['accuracy']-base_test['accuracy']:.3f}"],
+]
+story.append(make_table(overfit_data, col_widths=[2.5*cm, 2.5*cm, 2.5*cm, 2.5*cm, 3*cm]))
+story.append(P("Table: Train vs validation vs test accuracy. The train-test gap measures "
+               "overfitting/generalisation risk.", STYLE_CAPTION))
+story.append(SP())
+
 story.append(H2("11.3 Classification Reports"))
 for name, res in [("Random Forest", rf_test), ("Bagging", bag_test)]:
     story.append(H3(f"{name} (Test Set)"))
@@ -1250,8 +1431,6 @@ story.append(P(
     "A large gap would suggest that the model has overfit to the validation set "
     "during implicit hyperparameter selection."
 ))
-rf_val = results["val_results"]["rf"]
-bag_val = results["val_results"]["bagging"]
 gap_data = [
     ["Model", "Val Acc", "Test Acc", "Gap", "Val F1", "Test F1", "Gap"],
     ["RF", f"{rf_val['accuracy']:.3f}", f"{rf_test['accuracy']:.3f}",
@@ -1323,6 +1502,88 @@ if wf is not None:
     ))
 else:
     story.append(P("Walk-forward CV could not be run (too few events)."))
+if fig_wf is not None:
+    add_figure(story, fig_wf, caption="Figure 18: Walk-forward CV accuracy per fold — RF (blue) vs baseline (grey).")
+story.append(SP())
+
+# ── 11.8 Individual Tree Diagnostics ──
+story.append(H2("11.8 Individual Tree Performance Diagnostics"))
+story.append(P(
+    "To assess whether ensemble performance depends on a few strong trees or is "
+    "broadly distributed, we evaluate each individual tree on the test set."
+))
+if rf_tree_diag and bag_tree_diag:
+    tree_diag_data = [
+        ["Metric", "Random Forest", "Bagging"],
+        ["Mean tree accuracy", f"{rf_tree_diag['mean_tree_accuracy']:.4f}",
+         f"{bag_tree_diag['mean_tree_accuracy']:.4f}"],
+        ["Std tree accuracy", f"{rf_tree_diag['std_tree_accuracy']:.4f}",
+         f"{bag_tree_diag['std_tree_accuracy']:.4f}"],
+        ["Min tree accuracy", f"{rf_tree_diag['min_tree_accuracy']:.4f}",
+         f"{bag_tree_diag['min_tree_accuracy']:.4f}"],
+        ["Max tree accuracy", f"{rf_tree_diag['max_tree_accuracy']:.4f}",
+         f"{bag_tree_diag['max_tree_accuracy']:.4f}"],
+        ["Ensemble accuracy", f"{rf_tree_diag['ensemble_accuracy']:.4f}",
+         f"{bag_tree_diag['ensemble_accuracy']:.4f}"],
+        ["Ensemble improvement", f"{rf_tree_diag['ensemble_improvement']:+.4f}",
+         f"{bag_tree_diag['ensemble_improvement']:+.4f}"],
+    ]
+    story.append(make_table(tree_diag_data, col_widths=[4*cm, 4*cm, 4*cm]))
+    story.append(P("Table: Individual tree vs ensemble accuracy on the test set.", STYLE_CAPTION))
+    story.append(SP())
+    story.append(P(
+        "A positive ensemble improvement means the voting mechanism improves over the "
+        "average individual tree. The spread (min to max) shows the diversity among trees — "
+        "wider spread with positive ensemble improvement indicates effective ensemble "
+        "diversification."
+    ))
+    if fig_tree_diag:
+        add_figure(story, fig_tree_diag, width=14*cm,
+                   caption="Figure 19: Distribution of individual tree accuracies vs ensemble accuracy.")
+story.append(SP())
+
+# ── 11.9 5-Fold Event-Level CV ──
+story.append(H2("11.9 Five-Fold Event-Level Cross-Validation"))
+story.append(P(
+    "As a complementary diagnostic to walk-forward CV, we perform 5-fold "
+    "cross-validation over detected events.  Events are split into 5 contiguous, "
+    "pairwise disjoint folds.  For each fold: one fold serves as the test set, "
+    "the remaining folds are split 80/20 into train/validation.  This reduces "
+    "sampling noise on the small event dataset but does <b>not</b> respect "
+    "temporal ordering — it complements, rather than replaces, walk-forward CV."
+))
+if kfold is not None:
+    kf_data = [["Fold", "Train", "Val", "Test", "RF Acc", "Base Acc", "RF F1", "Base F1"]]
+    for _, r in kfold["folds"].iterrows():
+        kf_data.append([
+            str(int(r["fold"])),
+            str(int(r["train_size"])),
+            str(int(r["val_size"])),
+            str(int(r["test_size"])),
+            f"{r['rf_accuracy']:.3f}",
+            f"{r['base_accuracy']:.3f}",
+            f"{r['rf_f1_macro']:.3f}",
+            f"{r['base_f1_macro']:.3f}",
+        ])
+    kf_data.append(["<b>Mean</b>", "", "", "",
+                     f"<b>{kfold['rf_mean_acc']:.3f}</b>",
+                     f"<b>{kfold['base_mean_acc']:.3f}</b>",
+                     f"<b>{kfold['rf_mean_f1']:.3f}</b>",
+                     f"<b>{kfold['base_mean_f1']:.3f}</b>"])
+    kf_data.append(["<b>Std</b>", "", "", "",
+                     f"<b>{kfold['rf_std_acc']:.3f}</b>", "", f"<b>{kfold['rf_std_f1']:.3f}</b>", ""])
+    story.append(make_table(kf_data, col_widths=[1.5*cm, 1.5*cm, 1.5*cm, 1.5*cm,
+                                                  2*cm, 2*cm, 2*cm, 2*cm]))
+    story.append(P("Table: 5-fold event-level CV results (complementary to walk-forward).", STYLE_CAPTION))
+    story.append(P(
+        f"The RF achieves a mean accuracy of {kfold['rf_mean_acc']:.1%} "
+        f"(+/- {kfold['rf_std_acc']:.1%}) versus {kfold['base_mean_acc']:.1%} for the baseline, "
+        f"and mean macro-F1 of {kfold['rf_mean_f1']:.3f} (+/- {kfold['rf_std_f1']:.3f})."
+    ))
+    if fig_kfold:
+        add_figure(story, fig_kfold, caption="Figure 20: 5-fold event-level CV accuracy per fold.")
+else:
+    story.append(P("5-fold CV could not be run (too few events)."))
 story.append(PageBreak())
 
 # ── 12. Discussion ───────────────────────────────────────────────
@@ -1404,7 +1665,8 @@ story.append(PageBreak())
 story.append(H1("13. Limitations"))
 limitations = [
     f"<b>Small sample size.</b> With {n_labeled} total events and {n_test} test events, "
-    f"statistical power is limited. Confidence intervals around accuracy and F1 are wide.",
+    f"statistical power is limited. Confidence intervals around accuracy and F1 are wide. "
+    f"The 5-fold event-level CV and walk-forward CV reduce but do not eliminate this issue.",
 
     "<b>Single asset.</b> All experiments use SPY daily data. Results may not generalize "
     "to other instruments, timeframes, or markets.",
@@ -1428,6 +1690,10 @@ limitations = [
     "<b>Pattern detectors use fixed ATR multiples.</b> The 0.3 x ATR thresholds for "
     "breakout detection and proximity signals are hard-coded. Adaptive thresholds "
     "could improve performance across different volatility regimes.",
+
+    "<b>5-fold event-level CV does not respect temporal ordering.</b> It is included "
+    "as a complementary diagnostic to reduce sampling noise, not as a primary "
+    "evaluation method. Walk-forward CV remains the primary temporal validation.",
 ]
 for lim in limitations:
     story.append(P(f"&bull; {lim}"))
@@ -1469,17 +1735,26 @@ story.append(P(
     f"This project demonstrates a complete, transparent, and reproducible pipeline for "
     f"ML-based trading signal classification. Starting from {n_bars:,} daily SPY bars, "
     f"four pattern detectors identify {total_events} technically significant events. "
-    f"Triple-barrier labeling produces {n_labeled} labeled events for supervised learning. "
+    f"Signal localization is now explicitly documented per detector. "
+    f"Triple-barrier labeling (entry = Close, TP/SL = +/- 2.0 x ATR, max 10 bars) produces "
+    f"{n_labeled} labeled events for supervised learning. "
     f"A feature engineering module computes {n_features} features per event, combining "
-    f"technical indicators with novel pattern geometry and trendline touch statistics."
+    f"technical indicators (with trend-leaking features removed and MACD normalized), "
+    f"binary technical filters, pattern geometry, and trendline touch statistics."
 ))
 wf_conclusion = ""
 if wf is not None:
+    kf_text = ""
+    if kfold is not None:
+        kf_text = (
+            f"  Complementary 5-fold event-level CV yields mean RF accuracy "
+            f"{kfold['rf_mean_acc']:.1%} (+/- {kfold['rf_std_acc']:.1%})."
+        )
     wf_conclusion = (
         f"Walk-forward cross-validation ({wf['n_folds']} folds) yields a more reliable "
         f"estimate: mean RF accuracy {wf['rf_mean_acc']:.1%} versus baseline "
         f"{wf['base_mean_acc']:.1%}.  The RF outperforms the baseline in the majority of "
-        f"folds, confirming modest but genuine predictive signal."
+        f"folds, confirming modest but genuine predictive signal.{kf_text}"
     )
 else:
     wf_conclusion = (
@@ -1575,7 +1850,7 @@ tri_params = [
     ["cooldown", "10", "Bars between signals"],
     ["breakout threshold", "0.3 x ATR", "Distance for breakout detection"],
     ["flat threshold", "0.1 x ATR/window", "Slope < threshold = flat"],
-    ["touch tolerance", "0.3 x ATR", "Touch counting tolerance"],
+    ["touch tolerance", "0.15 x ATR", "Touch counting tolerance"],
 ]
 story.append(make_table(tri_params, col_widths=[4*cm, 3*cm, 7*cm]))
 story.append(SP())
@@ -1584,14 +1859,18 @@ story.append(H2("A.3 Channels"))
 ch_params = [
     ["Parameter", "Value", "Description"],
     ["backcandles", "40", "Base lookback (bars)"],
-    ["brange", "15", "Dynamic window search range"],
+    ["brange", "15", "Dynamic window search range (25-55)"],
     ["wind", "5", "Chunk size (bars)"],
+    ["pivot_order", "3", "+/- bars for swing-pivot detection"],
+    ["min_upper_touches", "2", "Min swing-pivot touches on upper line"],
+    ["min_lower_touches", "3", "Min swing-pivot touches on lower line"],
     ["slope_tolerance", "0.25", "Max relative slope difference"],
-    ["min_containment", "0.60", "Min containment ratio"],
+    ["min_containment", "0.70", "Min containment ratio"],
     ["cooldown", "10", "Bars between signals"],
     ["width range", "1-6 x ATR", "Valid channel width"],
-    ["proximity", "0.3 x ATR", "Signal threshold"],
-    ["touch tolerance", "0.3 x ATR", "Touch counting tolerance"],
+    ["proximity", "0.3 x ATR", "Boundary interaction threshold"],
+    ["touch tolerance", "0.20 x ATR", "Touch counting tolerance"],
+    ["rejection penalty", "20%", "Confidence reduction if no rejection"],
 ]
 story.append(make_table(ch_params, col_widths=[4*cm, 3*cm, 7*cm]))
 story.append(SP())
@@ -1640,15 +1919,13 @@ story.append(P(
 story.append(SP())
 
 feat_list = [
-    ("Trend", [
-        ("sma_10, sma_20, sma_50, sma_100, sma_200", "Simple moving averages"),
+    ("Trend (relative only)", [
         ("sma_10_dist, ..., sma_200_dist", "Relative distance from price to each SMA"),
         ("ma_spread_10_50", "Normalized spread between 10-day and 50-day SMA"),
         ("ma_spread_20_200", "Normalized spread between 20-day and 200-day SMA"),
         ("ma_spread_50_200", "Normalized spread between 50-day and 200-day SMA"),
     ]),
     ("Volatility", [
-        ("atr_14", "Average True Range (14-day)"),
         ("atr_ratio", "ATR(14) / Close — normalized volatility"),
         ("rvol_20", "20-day rolling annualized volatility"),
         ("bb_width", "Bollinger Band width (upper - lower) / SMA(20)"),
@@ -1658,14 +1935,23 @@ feat_list = [
         ("ret_1, ret_5, ret_10, ret_20", "Simple returns over 1, 5, 10, 20 days"),
         ("mom_5, mom_10, mom_20", "Rate-of-change momentum"),
         ("rsi_14", "Relative Strength Index (14-day)"),
-        ("macd", "MACD line (EMA12 - EMA26)"),
-        ("macd_signal", "MACD signal line (EMA9 of MACD)"),
-        ("macd_hist", "MACD histogram (MACD - signal)"),
+        ("macd_norm", "MACD / Close — price-normalized MACD line"),
+        ("macd_signal_norm", "Signal / Close — price-normalized signal line"),
+        ("macd_hist_norm", "Histogram / Close — price-normalized histogram"),
     ]),
     ("Volume", [
         ("volume_ratio", "Current volume / 20-day average volume"),
         ("volume_std", "Rolling volume standard deviation / mean"),
-        ("obv_norm", "Normalized on-balance volume"),
+    ]),
+    ("Binary Technical Filters", [
+        ("bb_touch_upper", "Close >= upper Bollinger Band (1/0)"),
+        ("bb_touch_lower", "Close <= lower Bollinger Band (1/0)"),
+        ("sma50_cross_above_sma200", "SMA(50) crosses above SMA(200) — golden cross (1/0)"),
+        ("sma50_cross_below_sma200", "SMA(50) crosses below SMA(200) — death cross (1/0)"),
+        ("close_touch_sma50", "|Close - SMA(50)| <= 0.3 x ATR (1/0)"),
+        ("close_touch_sma200", "|Close - SMA(200)| <= 0.3 x ATR (1/0)"),
+        ("rsi_oversold", "RSI(14) <= 30 (1/0)"),
+        ("rsi_overbought", "RSI(14) >= 70 (1/0)"),
     ]),
     ("Pattern Geometry", [
         ("upper_slope", "Slope of upper trendline"),
@@ -1682,13 +1968,16 @@ feat_list = [
         ("r_lower", "|r| of lower trendline regression"),
     ]),
     ("Event Type", [
-        ("etype_*", "One-hot encoded event type (9 categories)"),
-    ]),
-    ("Event Meta", [
-        ("entry_price", "Close price at event bar"),
-        ("event_atr", "ATR(14) at event bar"),
+        ("etype_*", "One-hot encoded event type (~9 categories)"),
     ]),
 ]
+story.append(P(
+    "<b>Excluded (trend-leaking):</b> Raw ATR(14), event_atr, raw MACD/signal/histogram, "
+    "obv_norm (cumulative OBV), absolute SMA levels, and entry_price — all trend with "
+    "SPY's price level or time and would leak temporal information into the model. "
+    "Replaced by normalized alternatives (atr_ratio, macd_norm, etc.).",
+    STYLE_SMALL,
+))
 
 for group, feats in feat_list:
     story.append(H3(f"B.{feat_list.index((group, feats))+1} {group}"))

@@ -9013,41 +9013,11 @@ Bollinger Bands, moving averages, volume) with pattern geometry features
 bias and gives an honest evaluation of generalization.</p>
 </li>
 </ul>
-<h3 id="What-Did-Not-Work-/-Limitations">What Did Not Work / Limitations<a class="anchor-link" href="#What-Did-Not-Work-/-Limitations">¶</a></h3><ul>
-<li><p><strong>Small event count:</strong> The pipeline produces on the order of ~150 labeled
-events from 15+ years of daily data. This is a very small training set for
-ML models, leading to high variance in metrics and limited generalization.</p>
-</li>
-<li><p><strong>Triangle and channel detectors:</strong> Per professor feedback, these detections
-were considered unreliable and were discussed for exclusion. The small number
-of detections (~20-25 each) contributes minimally to the training set.</p>
-</li>
-<li><p><strong>No hyperparameter tuning:</strong> Fixed hyperparameters (200 trees, max_depth=8)
-were used. With ~150 events, cross-validation or grid search risks severe
-overfitting.</p>
-</li>
-<li><p><strong>Class imbalance handling:</strong> RF uses <code>class_weight="balanced"</code>, but
-Bagging does not support this directly. The no_trade class is
-underrepresented.</p>
-</li>
-<li><p><strong>No regime features yet:</strong> HMM-based regime features (Phase 4) were
-planned but not incorporated into the final model. Adding bull/bear/sideways
-regime indicators could improve discrimination.</p>
-</li>
-</ul>
 <h3 id="Summary-of-Model-Performance">Summary of Model Performance<a class="anchor-link" href="#Summary-of-Model-Performance">¶</a></h3><p>Both Random Forest and Bagging outperform the stratified baseline,
 demonstrating that the feature set carries some predictive signal.
 However, with a small dataset, the absolute performance should be
 interpreted cautiously. The gap between validation and test metrics
 indicates the degree of generalization.</p>
-<h3 id="Recommendations-for-Future-Work">Recommendations for Future Work<a class="anchor-link" href="#Recommendations-for-Future-Work">¶</a></h3><ul>
-<li>Increase the event count by relaxing detection thresholds or adding
-new pattern types.</li>
-<li>Incorporate HMM regime features.</li>
-<li>Implement a walk-forward backtest (Phase 8) to measure risk-adjusted
-returns.</li>
-<li>Explore calibration-aware thresholds for trade entry.</li>
-</ul>
 </div>
 </div>
 </div>
@@ -9142,24 +9112,6 @@ Saved: touch_stats_channels.csv
 All tables saved to /Users/zeinebturki/Documents/regime-aware-ml-trading/regime-aware-ml-trading/outputs/
 </pre>
 </div>
-</div>
-</div>
-</div>
-</div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=conclusion">
-<div class="jp-Cell-inputWrapper" tabindex="0">
-<div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
-</div>
-<div class="jp-InputArea jp-Cell-inputArea"><div class="jp-InputPrompt jp-InputArea-prompt">
-</div><div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-MarkdownOutput" data-mime-type="text/markdown">
-<hr/>
-<h2 id="Conclusion">Conclusion<a class="anchor-link" href="#Conclusion">¶</a></h2><p>This notebook consolidated the full experiment pipeline: from raw SPY data
-through pattern detection, triple-barrier labeling, feature engineering, and
-model evaluation. All key statistics have been reproduced and cross-checked
-for consistency.</p>
-<p>The summary CSV files in <code>outputs/</code> provide the numerical foundation for
-the thesis document. Next steps include the walk-forward backtest (Phase 8)
-and the thesis write-up (Phase 9).</p>
 </div>
 </div>
 </div>

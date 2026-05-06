@@ -18,6 +18,12 @@ def detect_multiple_tops_bottoms(df, window=20, confirm_bars=5, cooldown=10):
     - **Cooldown** — after a signal fires, suppress the same type for
       *cooldown* bars to prevent clustering.
 
+    **Signal localization (yellow diamond):**
+    The signal bar is the bar where the rolling extreme condition (high at
+    ceiling or low at floor) coincides with a reversal slope condition
+    (negative close slope for tops, positive for bottoms) over confirm_bars.
+    The diamond is plotted at the Close price of this detected event bar.
+
     Parameters
     ----------
     df : pd.DataFrame

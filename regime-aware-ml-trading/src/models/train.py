@@ -145,6 +145,40 @@ def evaluate_model(clf, X, y, model_name="Model"):
     }
 
 
+def individual_tree_diagnostics(clf, X_test, y_test, model_name="Model"):
+    """Evaluate each individual tree in the ensemble on the test set.
+
+    Reports mean, min, max, and spread of per-tree accuracy to show
+    whether ensemble performance depends on a few strong trees or is
+    broadly distributed.
+    """
+    if not hasattr(clf, "estimators_"):
+        return None
+
+    tree_accs = []
+    for t in clf.estimators_:
+        y_pred = t.predict(X_test)
+        tree_accs.append(accuracy_score(y_test, y_pred))
+
+    tree_accs = np.array(tree_accs)
+    ensemble_pred = clf.predict(X_test)
+    ensemble_acc = accuracy_score(y_test, ensemble_pred)
+
+    return {
+        "model_name": model_name,
+        "n_trees": len(tree_accs),
+        "mean_tree_accuracy": round(float(tree_accs.mean()), 4),
+        "std_tree_accuracy": round(float(tree_accs.std()), 4),
+        "min_tree_accuracy": round(float(tree_accs.min()), 4),
+        "max_tree_accuracy": round(float(tree_accs.max()), 4),
+        "best_tree_accuracy": round(float(tree_accs.max()), 4),
+        "worst_tree_accuracy": round(float(tree_accs.min()), 4),
+        "ensemble_accuracy": round(ensemble_acc, 4),
+        "ensemble_improvement": round(ensemble_acc - float(tree_accs.mean()), 4),
+        "tree_accuracies": tree_accs,
+    }
+
+
 def tree_complexity_stats(clf, model_name="Model"):
     """Extract tree depth and complexity statistics from ensemble.
 
@@ -274,18 +308,129 @@ def walk_forward_cv(features, labels, labeled_df,
             "rf_f1_macro": rf_res["f1_macro"],
             "base_accuracy": base_res["accuracy"],
             "base_f1_macro": base_res["f1_macro"],
+            "rf_confusion_matrix": rf_res["confusion_matrix"],
+            "base_confusion_matrix": base_res["confusion_matrix"],
+            "rf_labels": rf_res["labels"],
         })
 
     if not fold_results:
         return None
 
-    wf_df = pd.DataFrame(fold_results)
+    # Aggregate confusion matrix across folds
+    agg_rf_cm = None
+    for fr in fold_results:
+        cm = fr["rf_confusion_matrix"]
+        if agg_rf_cm is None:
+            agg_rf_cm = cm.copy()
+        else:
+            # Pad to same size if needed (labels may differ across folds)
+            if cm.shape == agg_rf_cm.shape:
+                agg_rf_cm += cm
+
+    wf_df = pd.DataFrame([{k: v for k, v in fr.items()
+                           if k not in ("rf_confusion_matrix",
+                                        "base_confusion_matrix",
+                                        "rf_labels")}
+                          for fr in fold_results])
     return {
         "folds": wf_df,
+        "fold_details": fold_results,
         "rf_mean_acc": round(wf_df["rf_accuracy"].mean(), 4),
+        "rf_std_acc": round(wf_df["rf_accuracy"].std(), 4),
         "rf_mean_f1": round(wf_df["rf_f1_macro"].mean(), 4),
+        "rf_std_f1": round(wf_df["rf_f1_macro"].std(), 4),
         "base_mean_acc": round(wf_df["base_accuracy"].mean(), 4),
         "base_mean_f1": round(wf_df["base_f1_macro"].mean(), 4),
+        "n_folds": len(fold_results),
+        "aggregate_rf_cm": agg_rf_cm,
+    }
+
+
+# ------------------------------------------------------------------
+# 5-fold event-level cross-validation (complementary to walk-forward)
+# ------------------------------------------------------------------
+
+def kfold_event_cv(features, labels,
+                   n_splits=5, n_estimators=200, max_depth=8,
+                   random_state=42):
+    """5-fold event-level cross-validation (complementary diagnostic).
+
+    Unlike walk-forward CV which uses expanding chronological windows,
+    this splits events into contiguous, pairwise disjoint folds and
+    rotates the test fold.  This reduces sampling noise on small event
+    datasets but does NOT respect temporal ordering — it is a
+    complementary diagnostic, not a replacement for walk-forward CV.
+
+    For each fold: one fold = test, remaining folds split 80/20 into
+    train/validation.
+    """
+    features = features.fillna(0).reset_index(drop=True)
+    labels = labels.reset_index(drop=True)
+    n = len(features)
+    fold_size = n // n_splits
+
+    if fold_size < 5:
+        return None
+
+    fold_results = []
+    for k in range(n_splits):
+        test_start = k * fold_size
+        test_end = (k + 1) * fold_size if k < n_splits - 1 else n
+        test_idx = list(range(test_start, test_end))
+        train_val_idx = [i for i in range(n) if i not in test_idx]
+
+        # Split remaining into train (80%) and validation (20%)
+        n_tv = len(train_val_idx)
+        n_tr = int(n_tv * 0.8)
+        train_idx = train_val_idx[:n_tr]
+        val_idx = train_val_idx[n_tr:]
+
+        X_tr = features.iloc[train_idx]
+        y_tr = labels.iloc[train_idx]
+        X_val = features.iloc[val_idx]
+        y_val = labels.iloc[val_idx]
+        X_te = features.iloc[test_idx]
+        y_te = labels.iloc[test_idx]
+
+        if len(y_te.unique()) < 2 or len(y_tr.unique()) < 2:
+            continue
+
+        rf = train_random_forest(X_tr, y_tr, n_estimators=n_estimators,
+                                 max_depth=max_depth, random_state=random_state)
+        baseline = train_baseline(X_tr, y_tr, random_state=random_state)
+
+        rf_res = evaluate_model(rf, X_te, y_te, f"RF kfold-{k}")
+        base_res = evaluate_model(baseline, X_te, y_te, f"Base kfold-{k}")
+        rf_val_res = evaluate_model(rf, X_val, y_val, f"RF kfold-{k} val")
+
+        fold_results.append({
+            "fold": k,
+            "train_size": len(X_tr),
+            "val_size": len(X_val),
+            "test_size": len(X_te),
+            "rf_accuracy": rf_res["accuracy"],
+            "rf_f1_macro": rf_res["f1_macro"],
+            "rf_val_accuracy": rf_val_res["accuracy"],
+            "base_accuracy": base_res["accuracy"],
+            "base_f1_macro": base_res["f1_macro"],
+            "rf_confusion_matrix": rf_res["confusion_matrix"],
+        })
+
+    if not fold_results:
+        return None
+
+    kf_df = pd.DataFrame([{k: v for k, v in fr.items()
+                           if k != "rf_confusion_matrix"}
+                          for fr in fold_results])
+    return {
+        "folds": kf_df,
+        "fold_details": fold_results,
+        "rf_mean_acc": round(kf_df["rf_accuracy"].mean(), 4),
+        "rf_std_acc": round(kf_df["rf_accuracy"].std(), 4),
+        "rf_mean_f1": round(kf_df["rf_f1_macro"].mean(), 4),
+        "rf_std_f1": round(kf_df["rf_f1_macro"].std(), 4),
+        "base_mean_acc": round(kf_df["base_accuracy"].mean(), 4),
+        "base_mean_f1": round(kf_df["base_f1_macro"].mean(), 4),
         "n_folds": len(fold_results),
     }
 
@@ -325,6 +470,11 @@ def run_training_pipeline(features, labels, labeled_df,
                         max_depth=max_depth, random_state=random_state)
     baseline = train_baseline(X_train, y_train, random_state=random_state)
 
+    # Evaluate on train set (for overfitting analysis)
+    rf_train = evaluate_model(rf, X_train, y_train, "Random Forest (train)")
+    bag_train = evaluate_model(bag, X_train, y_train, "Bagging (train)")
+    base_train = evaluate_model(baseline, X_train, y_train, "Baseline (train)")
+
     # Evaluate on validation set
     rf_val = evaluate_model(rf, X_val, y_val, "Random Forest (val)")
     bag_val = evaluate_model(bag, X_val, y_val, "Bagging (val)")
@@ -339,6 +489,10 @@ def run_training_pipeline(features, labels, labeled_df,
     rf_trees = tree_complexity_stats(rf, "Random Forest")
     bag_trees = tree_complexity_stats(bag, "Bagging")
 
+    # Individual tree performance diagnostics
+    rf_tree_diag = individual_tree_diagnostics(rf, X_test, y_test, "Random Forest")
+    bag_tree_diag = individual_tree_diagnostics(bag, X_test, y_test, "Bagging")
+
     # Feature importance
     feature_names = list(features.columns)
     rf_fi = feature_importance_table(rf, feature_names)
@@ -349,15 +503,23 @@ def run_training_pipeline(features, labels, labeled_df,
                          n_splits=5, n_estimators=n_estimators,
                          max_depth=max_depth, random_state=random_state)
 
+    # 5-fold event-level cross-validation
+    kfold = kfold_event_cv(features, labels,
+                           n_splits=5, n_estimators=n_estimators,
+                           max_depth=max_depth, random_state=random_state)
+
     return {
         "split": split,
         "models": {"rf": rf, "bagging": bag, "baseline": baseline},
+        "train_results": {"rf": rf_train, "bagging": bag_train, "baseline": base_train},
         "val_results": {"rf": rf_val, "bagging": bag_val, "baseline": base_val},
         "test_results": {"rf": rf_test, "bagging": bag_test, "baseline": base_test},
         "tree_stats": {"rf": rf_trees, "bagging": bag_trees},
+        "tree_diagnostics": {"rf": rf_tree_diag, "bagging": bag_tree_diag},
         "feature_importance": {"rf": rf_fi, "bagging": bag_fi},
         "feature_names": feature_names,
         "walk_forward": wf,
+        "kfold_cv": kfold,
         "hyperparams": {
             "n_estimators": n_estimators,
             "max_depth": max_depth,

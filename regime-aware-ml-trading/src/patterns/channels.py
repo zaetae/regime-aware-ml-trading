@@ -79,6 +79,14 @@ def detect_channel(df, backcandles=40, brange=15, wind=5,
     8. Signal fires only on **confirmed boundary interaction**: current bar
        touches a boundary AND the close shows rejection (away from the line).
 
+    **Signal localization (yellow diamond):**
+    The signal bar is the boundary-interaction bar — the bar whose High is
+    within 0.3×ATR of the upper channel line or whose Low is within 0.3×ATR
+    of the lower channel line. An additional rejection check penalizes
+    confidence (but does not discard) if the Close does not move away from
+    the touched boundary. The diamond is plotted at the Close price of this
+    detected event bar.
+
     Parameters
     ----------
     df : pd.DataFrame

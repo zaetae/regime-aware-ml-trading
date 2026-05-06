@@ -18,6 +18,12 @@ def calculate_support_resistance(df, window=50, atr_mult=0.3,
     2. **Cooldown** — after a signal fires, suppress the same signal type for
        *cooldown* bars to avoid flagging the same approach as multiple events.
 
+    **Signal localization (yellow diamond):**
+    The signal bar is the proximity bar — the bar whose Close is within
+    atr_mult × ATR(14) of a stable (unchanged for stability_window bars)
+    rolling support or resistance level. The diamond is plotted at the
+    Close price of this detected event bar.
+
     Parameters
     ----------
     df : pd.DataFrame

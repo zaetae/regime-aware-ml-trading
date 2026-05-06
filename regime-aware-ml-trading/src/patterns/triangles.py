@@ -15,9 +15,17 @@ def detect_triangle_pattern(df, window=25, min_convergence_pct=0.05,
 
     1. Identify swing highs / lows (±3-bar neighbourhood).
     2. ``linregress`` on pivot points → slope, intercept, *r*.
-    3. Require ``|r| >= 0.9`` on each trendline (tight pivot alignment).
+    3. Require ``|r| >= min_r`` on each trendline (tight pivot alignment).
     4. Classify by slope signs: ascending / descending / symmetric.
     5. Fire signal when current bar breaks out of the recent range.
+
+    **Signal localization (yellow diamond):**
+    The signal bar is the breakout bar — the bar whose High exceeds the
+    recent 3-bar high by 0.3×ATR (upside breakout) or whose Low drops
+    below the recent 3-bar low by 0.3×ATR (downside breakout).  For
+    descending triangles an additional "upper-test" signal fires when
+    Close is within 0.3×ATR of the descending upper trendline.
+    The diamond is plotted at the Close price of this detected event bar.
 
     Parameters
     ----------
@@ -119,10 +127,12 @@ def detect_triangle_pattern(df, window=25, min_convergence_pct=0.05,
         if not (is_ascending or is_descending or is_symmetric):
             continue
 
-        # Containment (informational — not a hard gate with tight lines)
+        # Containment validation (hard gate: reject if < 80 %)
         tol = 0.1 * atr_i
         cr = containment_ratio(highs, lows, upper_line, lower_line,
                                tolerance=tol)
+        if cr < 0.80:
+            continue
 
         # --- Step 6a: breakout signal ---
         current_high = df["High"].iloc[i]
@@ -158,7 +168,7 @@ def detect_triangle_pattern(df, window=25, min_convergence_pct=0.05,
                     details.append(_make_detail(
                         df, i, "desc_triangle_upper_test",
                         high_coeffs, low_coeffs,
-                        window, cr, rmax, rmin, sh_idx, sl_idx,
+                        window, cr, rmax, rmin, sh_idx, sl_idx, atr_i,
                     ))
                 bars_since_last = 0
 
