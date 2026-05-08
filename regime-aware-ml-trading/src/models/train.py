@@ -2,7 +2,8 @@
 
 Uses time-aware train/validation/test splits to avoid temporal leakage.
 Provides comprehensive evaluation: confusion matrix, classification report,
-feature importance, tree complexity stats, and comparison between models.
+feature importance, tree complexity stats, comparison between models,
+and profitability metrics via the backtest simulator.
 """
 
 import numpy as np
@@ -15,6 +16,8 @@ from sklearn.metrics import (
     accuracy_score, f1_score
 )
 from sklearn.preprocessing import LabelEncoder
+
+from src.backtest.simulator import evaluate_profitability
 
 
 # ------------------------------------------------------------------
@@ -220,6 +223,52 @@ def tree_complexity_stats(clf, model_name="Model"):
     }
 
 
+def evaluate_profitability_for_split(clf, X, y, df, labeled_df, split_indices,
+                                     pt_mult=2.0, sl_mult=2.0, max_holding=10,
+                                     model_name="Model"):
+    """Evaluate a model's profitability on a data split.
+
+    Parameters
+    ----------
+    clf : classifier
+        Trained model.
+    X : pd.DataFrame
+        Feature matrix for this split.
+    y : pd.Series
+        True labels for this split.
+    df : pd.DataFrame
+        Full OHLCV data.
+    labeled_df : pd.DataFrame
+        Full labeled events (with event_date).
+    split_indices : array-like
+        Row indices into labeled_df for this split.
+    pt_mult, sl_mult, max_holding : float/int
+        Triple-barrier parameters for trade simulation.
+    model_name : str
+        Name for reporting.
+
+    Returns
+    -------
+    dict with classification + profitability metrics.
+    """
+    y_pred = clf.predict(X)
+
+    # Get the labeled_df subset for this split
+    split_labeled = labeled_df.iloc[split_indices].reset_index(drop=True)
+
+    metrics, trades = evaluate_profitability(
+        df, split_labeled, y_pred,
+        pt_mult=pt_mult, sl_mult=sl_mult, max_holding=max_holding,
+    )
+
+    return {
+        "model_name": model_name,
+        "profitability": metrics,
+        "trades": trades,
+        "y_pred": y_pred,
+    }
+
+
 def feature_importance_table(clf, feature_names, top_n=20):
     """Return a DataFrame of feature importances (sorted descending).
 
@@ -253,12 +302,16 @@ def feature_importance_table(clf, feature_names, top_n=20):
 
 def walk_forward_cv(features, labels, labeled_df,
                     n_splits=5, min_train_frac=0.30,
-                    n_estimators=200, max_depth=8, random_state=42):
+                    n_estimators=200, max_depth=8, random_state=42,
+                    df_ohlcv=None, pt_mult=2.0, sl_mult=2.0,
+                    max_holding=10):
     """Expanding-window walk-forward cross-validation.
 
     Splits the chronologically ordered events into ``n_splits`` folds.
     For fold *k*, training uses all events up to fold *k*, and testing
     uses fold *k+1*.  The training window grows with each fold.
+
+    If df_ohlcv is provided, also evaluates per-fold profitability.
 
     Returns
     -------
@@ -268,6 +321,7 @@ def walk_forward_cv(features, labels, labeled_df,
     sort_idx = dates.argsort()
     features = features.iloc[sort_idx].reset_index(drop=True).fillna(0)
     labels = labels.iloc[sort_idx].reset_index(drop=True)
+    sorted_labeled = labeled_df.iloc[sort_idx].reset_index(drop=True)
     dates = dates[sort_idx]
 
     n = len(features)
@@ -298,7 +352,7 @@ def walk_forward_cv(features, labels, labeled_df,
         rf_res = evaluate_model(rf, X_te, y_te, f"RF fold-{k}")
         base_res = evaluate_model(baseline, X_te, y_te, f"Base fold-{k}")
 
-        fold_results.append({
+        fold_entry = {
             "fold": k,
             "train_size": len(X_tr),
             "test_size": len(X_te),
@@ -311,7 +365,27 @@ def walk_forward_cv(features, labels, labeled_df,
             "rf_confusion_matrix": rf_res["confusion_matrix"],
             "base_confusion_matrix": base_res["confusion_matrix"],
             "rf_labels": rf_res["labels"],
-        })
+        }
+
+        # Per-fold profitability
+        if df_ohlcv is not None:
+            test_labeled = sorted_labeled.iloc[test_start:test_end]
+            rf_pred = rf.predict(X_te)
+            base_pred = baseline.predict(X_te)
+            rf_profit, _ = evaluate_profitability(
+                df_ohlcv, test_labeled, rf_pred,
+                pt_mult=pt_mult, sl_mult=sl_mult, max_holding=max_holding,
+            )
+            base_profit, _ = evaluate_profitability(
+                df_ohlcv, test_labeled, base_pred,
+                pt_mult=pt_mult, sl_mult=sl_mult, max_holding=max_holding,
+            )
+            fold_entry["rf_cum_return"] = rf_profit["cumulative_return"]
+            fold_entry["rf_win_rate"] = rf_profit["win_rate"]
+            fold_entry["rf_sharpe"] = rf_profit["sharpe_ratio"]
+            fold_entry["base_cum_return"] = base_profit["cumulative_return"]
+
+        fold_results.append(fold_entry)
 
     if not fold_results:
         return None
@@ -323,16 +397,14 @@ def walk_forward_cv(features, labels, labeled_df,
         if agg_rf_cm is None:
             agg_rf_cm = cm.copy()
         else:
-            # Pad to same size if needed (labels may differ across folds)
             if cm.shape == agg_rf_cm.shape:
                 agg_rf_cm += cm
 
-    wf_df = pd.DataFrame([{k: v for k, v in fr.items()
-                           if k not in ("rf_confusion_matrix",
-                                        "base_confusion_matrix",
-                                        "rf_labels")}
+    exclude_keys = {"rf_confusion_matrix", "base_confusion_matrix", "rf_labels"}
+    wf_df = pd.DataFrame([{k: v for k, v in fr.items() if k not in exclude_keys}
                           for fr in fold_results])
-    return {
+
+    result = {
         "folds": wf_df,
         "fold_details": fold_results,
         "rf_mean_acc": round(wf_df["rf_accuracy"].mean(), 4),
@@ -344,6 +416,14 @@ def walk_forward_cv(features, labels, labeled_df,
         "n_folds": len(fold_results),
         "aggregate_rf_cm": agg_rf_cm,
     }
+
+    # Aggregate profitability across folds
+    if df_ohlcv is not None and "rf_cum_return" in wf_df.columns:
+        result["rf_mean_cum_return"] = round(wf_df["rf_cum_return"].mean(), 6)
+        result["rf_mean_win_rate"] = round(wf_df["rf_win_rate"].mean(), 4)
+        result["rf_mean_sharpe"] = round(wf_df["rf_sharpe"].mean(), 4)
+
+    return result
 
 
 # ------------------------------------------------------------------
@@ -442,12 +522,28 @@ def kfold_event_cv(features, labels,
 def run_training_pipeline(features, labels, labeled_df,
                           train_frac=0.6, val_frac=0.2,
                           n_estimators=200, max_depth=8,
-                          random_state=42):
+                          random_state=42,
+                          df_ohlcv=None, pt_mult=2.0, sl_mult=2.0,
+                          max_holding=10):
     """Run the complete training and evaluation pipeline.
+
+    Parameters
+    ----------
+    features, labels, labeled_df
+        Feature matrix, labels, and labeled events DataFrame.
+    train_frac, val_frac : float
+        Split fractions.
+    n_estimators, max_depth, random_state
+        Model hyperparameters.
+    df_ohlcv : pd.DataFrame, optional
+        Full OHLCV data for profitability evaluation. If None, profitability
+        metrics are skipped.
+    pt_mult, sl_mult, max_holding
+        Triple-barrier parameters for profitability simulation.
 
     Returns
     -------
-    results : dict with all models, evaluations, and statistics.
+    results : dict with all models, evaluations, statistics, and profitability.
     """
     # Handle NaN in features
     features = features.fillna(0)
@@ -508,6 +604,44 @@ def run_training_pipeline(features, labels, labeled_df,
                            n_splits=5, n_estimators=n_estimators,
                            max_depth=max_depth, random_state=random_state)
 
+    # --- Profitability evaluation ---
+    profitability = None
+    if df_ohlcv is not None:
+        # Sort labeled_df by event_date to match the split ordering
+        dates = pd.DatetimeIndex(labeled_df["event_date"])
+        sort_idx = dates.argsort()
+        sorted_labeled = labeled_df.iloc[sort_idx].reset_index(drop=True)
+
+        n = len(sorted_labeled)
+        n_train = int(n * train_frac)
+        n_val = int(n * (train_frac + val_frac))
+
+        test_labeled = sorted_labeled.iloc[n_val:]
+        val_labeled = sorted_labeled.iloc[n_train:n_val]
+
+        profit_results = {}
+        for name, clf in [("rf", rf), ("bagging", bag), ("baseline", baseline)]:
+            # Test set profitability
+            y_pred_test = clf.predict(X_test)
+            test_metrics, test_trades = evaluate_profitability(
+                df_ohlcv, test_labeled, y_pred_test,
+                pt_mult=pt_mult, sl_mult=sl_mult, max_holding=max_holding,
+            )
+            # Validation set profitability
+            y_pred_val = clf.predict(X_val)
+            val_metrics, val_trades = evaluate_profitability(
+                df_ohlcv, val_labeled, y_pred_val,
+                pt_mult=pt_mult, sl_mult=sl_mult, max_holding=max_holding,
+            )
+            profit_results[name] = {
+                "test": test_metrics,
+                "test_trades": test_trades,
+                "val": val_metrics,
+                "val_trades": val_trades,
+            }
+
+        profitability = profit_results
+
     return {
         "split": split,
         "models": {"rf": rf, "bagging": bag, "baseline": baseline},
@@ -520,10 +654,14 @@ def run_training_pipeline(features, labels, labeled_df,
         "feature_names": feature_names,
         "walk_forward": wf,
         "kfold_cv": kfold,
+        "profitability": profitability,
         "hyperparams": {
             "n_estimators": n_estimators,
             "max_depth": max_depth,
             "train_frac": train_frac,
             "val_frac": val_frac,
+            "pt_mult": pt_mult,
+            "sl_mult": sl_mult,
+            "max_holding": max_holding,
         },
     }

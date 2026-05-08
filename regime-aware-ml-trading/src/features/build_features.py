@@ -2,6 +2,10 @@
 
 Each row represents one labeled event. Features use only information
 available at or before the event bar (no lookahead).
+
+Supports two event modes:
+- "standard": only events from the original pattern detectors
+- "with_touch": adds touch-based events (price touching S/R, channels)
 """
 
 import numpy as np
@@ -12,7 +16,7 @@ from src.data.utils import compute_atr
 from src.patterns.scanner import scan_all_patterns
 from src.patterns.triangles import detect_triangle_pattern
 from src.patterns.channels import detect_channel
-from src.labeling.label_events import label_events
+from src.labeling.label_events import label_events, triple_barrier_label
 
 
 def _pattern_geometry_features(labeled_df, tri_details, ch_details):
@@ -66,7 +70,9 @@ def _event_type_dummies(labeled_df):
 
 
 def build_feature_matrix(df, exclude_patterns=None,
-                         pt_mult=2.0, sl_mult=2.0, max_holding=10):
+                         pt_mult=2.0, sl_mult=2.0, max_holding=10,
+                         include_touch_events=False, touch_atr_mult=0.2,
+                         touch_cooldown=10):
     """Build the full feature matrix for labeled events.
 
     Parameters
@@ -77,6 +83,13 @@ def build_feature_matrix(df, exclude_patterns=None,
         Pattern types to exclude from labeling.
     pt_mult, sl_mult, max_holding
         Forwarded to label_events().
+    include_touch_events : bool
+        If True, also generate touch-based events (price touching S/R
+        and channel boundaries) and label them with triple-barrier.
+    touch_atr_mult : float
+        ATR multiplier for touch proximity (default 0.2).
+    touch_cooldown : int
+        Cooldown between touch events (default 10).
 
     Returns
     -------
@@ -94,10 +107,29 @@ def build_feature_matrix(df, exclude_patterns=None,
     _, tri_details = detect_triangle_pattern(df, return_details=True)
     _, ch_details = detect_channel(df, return_details=True)
 
-    # Step 3: Label events
+    # Step 3: Label events (original detector events)
     labeled = label_events(df, pt_mult=pt_mult, sl_mult=sl_mult,
                            max_holding=max_holding,
                            exclude_patterns=exclude_patterns)
+
+    # Mark original events
+    if len(labeled) > 0:
+        labeled["event_source"] = "detector"
+
+    # Step 3b: Optionally add touch-based events
+    if include_touch_events and len(labeled) > 0:
+        touch_labeled = _generate_touch_labels(
+            df, pt_mult=pt_mult, sl_mult=sl_mult,
+            max_holding=max_holding, atr_mult=touch_atr_mult,
+            cooldown=touch_cooldown,
+        )
+        if len(touch_labeled) > 0:
+            touch_labeled["event_source"] = "touch"
+            labeled = pd.concat([labeled, touch_labeled],
+                                ignore_index=True)
+            # Remove duplicates (same event_date)
+            labeled = labeled.drop_duplicates(subset="event_date", keep="first")
+            labeled = labeled.sort_values("event_date").reset_index(drop=True)
 
     if len(labeled) == 0:
         return pd.DataFrame(), pd.Series(dtype=str), labeled
@@ -136,3 +168,88 @@ def build_feature_matrix(df, exclude_patterns=None,
     labels = labeled["label"]
 
     return features, labels, labeled
+
+
+def _generate_touch_labels(df, pt_mult=2.0, sl_mult=2.0, max_holding=10,
+                           atr_mult=0.2, cooldown=10):
+    """Generate and label touch-based events.
+
+    Returns a labeled DataFrame in the same format as label_events().
+    """
+    from src.patterns.touch_events import generate_all_touch_events, _get_touch_event_type
+
+    df_touch, stats = generate_all_touch_events(
+        df, atr_mult=atr_mult, cooldown=cooldown,
+    )
+
+    # Get touch-only events (not already flagged by standard detectors)
+    touch_only = df_touch[df_touch["has_touch_event"] & ~df_touch["has_event"]].copy()
+
+    if len(touch_only) == 0:
+        return pd.DataFrame()
+
+    # Label with triple-barrier
+    from src.data.utils import compute_atr
+    atr = compute_atr(df, window=14)
+
+    results = []
+    for event_date, row in touch_only.iterrows():
+        pos = df.index.get_loc(event_date)
+        entry_price = df["Close"].iloc[pos]
+        atr_val = atr.iloc[pos]
+
+        if pd.isna(atr_val) or atr_val <= 0:
+            continue
+
+        upper = entry_price + pt_mult * atr_val
+        lower = entry_price - sl_mult * atr_val
+
+        end_pos = min(pos + max_holding, len(df) - 1)
+        label = "no_trade"
+        exit_price = df["Close"].iloc[end_pos]
+        exit_date = df.index[end_pos]
+        bars_held = end_pos - pos
+
+        for j in range(pos + 1, min(pos + max_holding + 1, len(df))):
+            high_j = df["High"].iloc[j]
+            low_j = df["Low"].iloc[j]
+            hit_upper = high_j >= upper
+            hit_lower = low_j <= lower
+
+            if hit_upper and hit_lower:
+                close_j = df["Close"].iloc[j]
+                label = "long" if close_j >= entry_price else "short"
+                exit_price = close_j
+                exit_date = df.index[j]
+                bars_held = j - pos
+                break
+            elif hit_upper:
+                label = "long"
+                exit_price = upper
+                exit_date = df.index[j]
+                bars_held = j - pos
+                break
+            elif hit_lower:
+                label = "short"
+                exit_price = lower
+                exit_date = df.index[j]
+                bars_held = j - pos
+                break
+
+        return_pct = (exit_price - entry_price) / entry_price * 100
+
+        results.append({
+            "event_date": event_date,
+            "event_type": _get_touch_event_type(row),
+            "entry_price": round(entry_price, 2),
+            "atr": round(atr_val, 4),
+            "upper_barrier": round(upper, 2),
+            "lower_barrier": round(lower, 2),
+            "exit_date": exit_date,
+            "exit_price": round(exit_price, 2),
+            "bars_held": bars_held,
+            "label": label,
+            "return_pct": round(return_pct, 4),
+        })
+
+    return pd.DataFrame(results)

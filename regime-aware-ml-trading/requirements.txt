@@ -14,3 +14,4 @@ pyyaml
 requests
 reportlab
 nbconvert
+optuna

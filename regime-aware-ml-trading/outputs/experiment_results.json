@@ -1,0 +1,24 @@
+{
+  "best_f1_params": {
+    "pt_mult": 2.0,
+    "sl_mult": 1.5,
+    "max_holding": 10
+  },
+  "best_f1_score": 0.5694,
+  "best_profit_params": {
+    "pt_mult": 2.5,
+    "sl_mult": 3.0,
+    "max_holding": 20
+  },
+  "best_profit_score": 0.258489,
+  "baseline_results": {
+    "accuracy": 0.2857,
+    "f1_macro": 0.16
+  },
+  "touch_events": {
+    "n_detector": 104,
+    "n_touch": 38,
+    "n_total": 142
+  },
+  "n_configs_tested": 100
+}
