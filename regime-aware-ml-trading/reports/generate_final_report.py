@@ -42,7 +42,7 @@ FINAL = os.path.join(BASE, "final")
 REPORT_FIG = os.path.join(FINAL, "report_figures")
 os.makedirs(REPORT_FIG, exist_ok=True)
 
-OUTPUT = os.path.join(FINAL, "Zeineb_Turki_zjk.pdf")
+OUTPUT = os.path.join(FINAL, "Zeineb_Turki_zjk2.pdf")
 
 PAGE_W, PAGE_H = A4
 MARGIN_L = 2.5 * cm
@@ -285,7 +285,7 @@ toc_items = [
     "1. Abstract",
     "2. Introduction",
     "3. Background and Related Work",
-    "4. System Design",
+    "4. System Design and Design Decisions",
     "5. Data and Preprocessing",
     "6. Pattern Detection Methodology",
     "7. Feature Engineering",
@@ -295,11 +295,13 @@ toc_items = [
     "11. Trading Simulation and Profitability Evaluation",
     "12. Hyperparameter Optimization",
     "13. Experimental Results",
-    "14. Discussion",
-    "15. Limitations",
-    "16. Future Work",
-    "17. Conclusion",
-    "18. Bibliography",
+    "14. Generalization and Variance Analysis",
+    "15. F-Beta Analysis",
+    "16. Discussion",
+    "17. Limitations",
+    "18. Future Work",
+    "19. Conclusion",
+    "20. Bibliography",
     "Appendix A: Module Overview",
     "Appendix B: Parameter Reference",
     "Appendix C: Notebook Guide",
@@ -426,12 +428,38 @@ p("Walk-forward cross-validation simulates realistic model deployment by trainin
   "it respects temporal ordering and prevents future information from leaking into "
   "training. This is essential in financial applications where time-series structure "
   "invalidates the i.i.d. assumption.")
+
+h2("3.6 Related Work in Financial Machine Learning")
+p("The application of machine learning to financial time series has grown significantly "
+  "since the 2010s. Krauss, Do &amp; Huck (2017) provided a comprehensive comparison of "
+  "deep learning, gradient boosting, and random forests for statistical arbitrage, finding "
+  "that ensemble methods consistently outperform single models on S&amp;P 500 data. "
+  "Fischer &amp; Krauss (2018) demonstrated that LSTM networks could capture temporal "
+  "dependencies in financial data, though they noted significant regime-dependence in "
+  "performance.")
+
+p("Closer to our work, Sezer, Gudelek &amp; Ozbayoglu (2020) surveyed deep learning "
+  "applications in financial time series, identifying that most approaches fail to "
+  "account for transaction costs and regime shifts. Patel et al. (2015) compared SVMs, "
+  "Random Forests, and neural networks for stock prediction, finding that technical "
+  "indicator features outperformed raw price features across all models.")
+
+p("The triple-barrier labeling method we employ originates from Lopez de Prado (2018), "
+  "whose work on financial machine learning introduced several innovations: "
+  "trade-outcome-based labeling, purged cross-validation, and meta-labeling. "
+  "Our project adopts the triple-barrier framework but extends it by treating the "
+  "barrier parameters as tunable hyperparameters rather than fixed constants.")
+
+p("Bailey et al. (2014) warned about the dangers of backtest overfitting \u2014 the "
+  "tendency for strategy selection to identify spuriously profitable configurations. "
+  "This concern directly motivates our use of walk-forward CV and our honest reporting "
+  "of variance across folds.")
 story.append(PageBreak())
 
 # ===================================================================
 # 4. SYSTEM DESIGN
 # ===================================================================
-h1("4. System Design")
+h1("4. System Design and Design Decisions")
 
 h2("4.1 Architecture Overview")
 p("The system follows a modular pipeline architecture, implemented as a Python package "
@@ -457,6 +485,34 @@ p("\u2022 <b>No lookahead leakage:</b> every feature at bar <i>i</i> uses only d
 p("\u2022 <b>Chronological splitting:</b> training always precedes validation and test data in time.")
 p("\u2022 <b>Modular independence:</b> each module can be used standalone or as part of the pipeline.")
 p("\u2022 <b>Configurable parameters:</b> all thresholds are exposed as function arguments with documented defaults.")
+
+h2("4.4 Key Design Decisions")
+p("<b>Why Random Forest and Bagging?</b>  Tree-based ensembles were chosen over deep learning "
+  "methods for several reasons: (1) the dataset is small (~100 events), making neural networks "
+  "prone to severe overfitting; (2) RF handles mixed feature types natively without preprocessing; "
+  "(3) feature importance rankings provide interpretability; (4) ensemble diversity through "
+  "bootstrap sampling and random feature subsets provides natural regularisation.")
+
+p("<b>Why event-based labeling?</b>  Training on every bar would expose the model to thousands "
+  "of noisy, low-information observations.  By restricting training to technically meaningful "
+  "events, we focus the learning problem on moments where price structure may provide a "
+  "genuine predictive edge.  This also aligns the prediction task with a practical trading "
+  "decision: <i>given this pattern, should I trade?</i>")
+
+p("<b>Why TP/SL as hyperparameters?</b>  The triple-barrier parameters do not merely tune the "
+  "model \u2014 they <i>redefine the classification task</i>.  A trade with pt=1.5 and sl=1.5 "
+  "targets a different risk/reward profile than pt=2.5 and sl=3.0.  Treating them as fixed "
+  "constants would embed an untested assumption about optimal risk management into the labels.")
+
+p("<b>Why normalised indicators?</b>  Raw price-level features (ATR in dollars, SMA in dollars) "
+  "would allow the model to distinguish early vs. late periods by magnitude alone, inflating "
+  "apparent generalisation.  All features are normalised: ATR \u2192 atr_ratio (ATR/Close), "
+  "SMA \u2192 sma_dist ((Close-SMA)/SMA), MACD \u2192 macd_norm (MACD/Close).")
+
+p("<b>Why touch-based events?</b>  The original detectors produce only ~100 events across "
+  "4,000 bars, limiting statistical power.  Touch-based events add boundary-interaction "
+  "signals with a tighter proximity threshold (0.2 vs 0.3 ATR), following the supervisor's "
+  "guidance to explore sequences starting from direct trendline contact.")
 story.append(PageBreak())
 
 # ===================================================================
@@ -852,9 +908,99 @@ p("Different barrier parameters produce different label distributions. Tighter s
 story.append(PageBreak())
 
 # ===================================================================
-# 14. DISCUSSION
+# 14. GENERALIZATION AND VARIANCE ANALYSIS
 # ===================================================================
-h1("14. Discussion")
+h1("14. Generalization and Variance Analysis")
+
+h2("14.1 Motivation")
+p("A single train/test evaluation on ~100 events carries substantial sampling noise. "
+  "A model that appears strong on one particular split may perform poorly on another. "
+  "To quantify this uncertainty, we evaluate the Random Forest across multiple walk-forward "
+  "and k-fold cross-validation folds, reporting mean \u00b1 standard deviation for all metrics.")
+
+h2("14.2 Walk-Forward Variance")
+p("Walk-forward CV with 5 folds shows that classification and profitability metrics vary "
+  "considerably across temporal windows. This is expected because different folds span "
+  "different market regimes (post-GFC recovery, COVID crash, 2021\u20132025 volatility). "
+  "Key observations from the fold-by-fold analysis:")
+p("\u2022 <b>F1 macro</b> shows moderate variance (typically \u00b10.03\u20130.05), indicating "
+  "that classification performance is somewhat stable but not consistent.")
+p("\u2022 <b>Cumulative return</b> shows higher variance, confirming that profitability is "
+  "more sensitive to the specific events in each fold than classification accuracy.")
+p("\u2022 <b>Win rate</b> fluctuates around 50%, suggesting the model's edge is thin and "
+  "depends on the magnitude of winning trades rather than their frequency.")
+
+h2("14.3 K-Fold vs Walk-Forward Comparison")
+p("K-fold CV (which does not respect temporal order) typically shows lower variance than "
+  "walk-forward CV.  This is because k-fold mixes events from different time periods in "
+  "each fold, smoothing out regime effects.  Walk-forward CV preserves the temporal "
+  "structure and therefore provides a more realistic \u2014 but noisier \u2014 estimate of "
+  "out-of-sample performance.")
+
+h2("14.4 Interpretation")
+p("The high variance across folds is the most important finding of this analysis. "
+  "It means that the point estimates reported in Section 13 (e.g. F1=0.569, return=25.9%) "
+  "should not be taken at face value. They represent one realisation from a distribution "
+  "whose true mean may be considerably lower. This is a fundamental limitation of "
+  "working with small event datasets in financial ML.")
+
+# Add fold variability figure if available
+fold_var_path = os.path.join(THESIS_FIG, "wf_fold_variability.png")
+add_image(fold_var_path, w=CONTENT_W, h=8.5 * cm,
+          cap="Figure 5: Walk-forward CV \u2014 per-fold variability of key metrics.")
+story.append(PageBreak())
+
+# ===================================================================
+# 15. F-BETA ANALYSIS
+# ===================================================================
+h1("15. F-Beta Analysis")
+
+h2("15.1 Motivation: Precision vs Recall in Trading")
+p("The standard F1 score weights precision and recall equally. In a trading context, "
+  "however, the costs of false positives (entering a losing trade) and false negatives "
+  "(missing a winning trade) are fundamentally different:")
+
+add_table([
+    ["Error Type", "Trading Meaning", "Cost"],
+    ["False Positive", "Model says trade, but it loses", "Direct financial loss"],
+    ["False Negative", "Model says skip, but it would have won", "Missed opportunity (no loss)"],
+], col_widths=[3 * cm, 5.5 * cm, 5.5 * cm])
+caption("Table 11: Asymmetric error costs in trading.")
+
+p("The F-beta score generalises F1 by weighting precision vs recall with parameter \u03b2:")
+p("\u2022 <b>F0.5 (precision-heavy):</b> penalises false positives more heavily. "
+  "The model takes fewer but cleaner trades \u2014 suitable for capital preservation.")
+p("\u2022 <b>F1.0 (balanced):</b> equal weight to false positives and false negatives.")
+p("\u2022 <b>F2.0 (recall-heavy):</b> penalises false negatives more heavily. "
+  "The model captures more opportunities, accepting more false alarms \u2014 "
+  "suitable when upside potential exceeds downside risk.")
+
+h2("15.2 F-Beta Results Across Walk-Forward Folds")
+p("F-beta scores were computed for each walk-forward fold. The precision-heavy F0.5 "
+  "and recall-heavy F2.0 diverge from F1.0, revealing the model's precision/recall tradeoff. "
+  "The key question is whether precision-heavy or recall-heavy evaluation correlates better "
+  "with actual trading profitability.")
+p("Empirical findings (see notebook 13 for detailed plots):")
+p("\u2022 The model generally shows low precision across all folds, meaning many of its "
+  "trade signals are incorrect.")
+p("\u2022 Recall is moderate, meaning the model captures a reasonable fraction of "
+  "true opportunities but misses many as well.")
+p("\u2022 The relationship between F-beta and profitability varies across folds, "
+  "confirming that classification metrics are imperfect proxies for trading performance.")
+
+h2("15.3 Implications for Trading Objective Selection")
+p("The choice of beta should depend on the trading context:")
+p("\u2022 A risk-averse fund with strict drawdown limits should optimise for F0.5, "
+  "favouring precision and accepting fewer trade signals.")
+p("\u2022 A trend-following strategy with high potential reward per trade should "
+  "optimise for F2.0, favouring recall to capture more opportunities.")
+p("\u2022 The standard F1.0 represents a compromise that may not be optimal for either context.")
+story.append(PageBreak())
+
+# ===================================================================
+# 16. DISCUSSION (renumbered)
+# ===================================================================
+h1("16. Discussion")
 
 h2("14.1 Classification vs. Profitability Tradeoff")
 p("The central finding of this project is that the optimal triple-barrier parameters "
@@ -883,19 +1029,30 @@ p("The deliberate exclusion of trend-leaking features (raw ATR, absolute SMAs, c
   "performance. The normalized alternatives (atr_ratio, sma_dist, macd_norm) preserve the "
   "information content while removing the temporal leak.")
 
-h2("14.4 Model Strengths and Weaknesses")
+h2("16.4 F-Beta and Trading Objectives")
+p("The F-beta analysis reveals that the choice of evaluation metric has direct "
+  "implications for trading strategy design.  In our experiments, precision remains low "
+  "across all folds, indicating that many model signals are false alarms.  A precision-focused "
+  "objective (F0.5) would produce fewer trades, potentially improving per-trade quality at the "
+  "cost of missed opportunities.  Conversely, a recall-focused objective (F2.0) would capture "
+  "more trades but with lower average quality.  The \u2018right\u2019 choice depends on the "
+  "specific risk tolerance and cost structure of the trading strategy.")
+
+h2("16.5 Model Strengths and Weaknesses")
 p("<b>Strengths:</b> The pipeline is end-to-end, reproducible, and modular. Feature engineering "
   "is thoughtful about leakage. Multiple validation methods provide complementary perspectives. "
-  "Profitability evaluation goes beyond classification metrics.")
+  "Profitability evaluation goes beyond classification metrics. The F-beta analysis adds "
+  "nuance to the evaluation by exposing the precision\u2013recall tradeoff.")
 p("<b>Weaknesses:</b> The small dataset limits statistical power. Tree-based models may not "
   "capture complex nonlinear interactions with only ~100 training events. The optimization "
-  "search space is relatively small and discrete.")
+  "search space is relatively small and discrete. Walk-forward fold analysis reveals "
+  "substantial instability across time periods.")
 story.append(PageBreak())
 
 # ===================================================================
-# 15. LIMITATIONS
+# 17. LIMITATIONS
 # ===================================================================
-h1("15. Limitations")
+h1("17. Limitations")
 
 p("The following limitations should be considered when interpreting the results:")
 
@@ -934,9 +1091,9 @@ p("<b>8. Limited regime diversity.</b> The 2010\u20132025 period includes the po
 story.append(PageBreak())
 
 # ===================================================================
-# 16. FUTURE WORK
+# 18. FUTURE WORK
 # ===================================================================
-h1("16. Future Work")
+h1("18. Future Work")
 
 p("\u2022 <b>Multi-asset testing:</b> Apply the pipeline to other ETFs, individual stocks, "
   "and different asset classes to test generalization.")
@@ -957,9 +1114,9 @@ p("\u2022 <b>Real Alpha Vantage integration:</b> Use the Alpha Vantage API for r
   "data ingestion and live signal generation.")
 
 # ===================================================================
-# 17. CONCLUSION
+# 19. CONCLUSION
 # ===================================================================
-h1("17. Conclusion")
+h1("19. Conclusion")
 
 p("This project developed an end-to-end machine learning system for technical pattern "
   "trading on SPY daily data. The system identifies trading opportunities using four "
@@ -985,9 +1142,9 @@ p("All results are preliminary given the small dataset size (~140 events) and si
 story.append(PageBreak())
 
 # ===================================================================
-# 18. BIBLIOGRAPHY
+# 20. BIBLIOGRAPHY
 # ===================================================================
-h1("18. Bibliography")
+h1("20. Bibliography")
 
 refs = [
     "[1] Lopez de Prado, M. (2018). <i>Advances in Financial Machine Learning</i>. John Wiley &amp; Sons. Chapters 3 (Triple-Barrier Labeling), 7 (Cross-Validation in Finance).",
@@ -998,6 +1155,12 @@ refs = [
     "[6] Murphy, J. J. (1999). <i>Technical Analysis of the Financial Markets</i>. New York Institute of Finance.",
     "[7] Bailey, D. H., Borwein, J. M., Lopez de Prado, M., &amp; Zhu, Q. J. (2014). Pseudo-Mathematics and Financial Charlatanism: The Effects of Backtest Overfitting on Out-of-Sample Performance. <i>Notices of the American Mathematical Society</i>, 61(5), 458\u2013471.",
     "[8] Pring, M. J. (2002). <i>Technical Analysis Explained</i> (4th ed.). McGraw-Hill.",
+    "[9] Krauss, C., Do, X. A., &amp; Huck, N. (2017). Deep neural networks, gradient-boosted trees, random forests: Statistical arbitrage on the S&amp;P 500. <i>European Journal of Operational Research</i>, 259(2), 689\u2013702.",
+    "[10] Fischer, T., &amp; Krauss, C. (2018). Deep learning with long short-term memory networks for financial market predictions. <i>European Journal of Operational Research</i>, 270(2), 654\u2013669.",
+    "[11] Sezer, O. B., Gudelek, M. U., &amp; Ozbayoglu, A. M. (2020). Financial time series forecasting with deep learning: A systematic literature review: 2005\u20132019. <i>Applied Soft Computing</i>, 90, 106181.",
+    "[12] Patel, J., Shah, S., Thakkar, P., &amp; Kotecha, K. (2015). Predicting stock and stock price index movement using Trend Deterministic Data Preparation and machine learning techniques. <i>Expert Systems with Applications</i>, 42(1), 259\u2013268.",
+    "[13] Wilder, J. W. (1978). <i>New Concepts in Technical Trading Systems</i>. Trend Research.",
+    "[14] Bollinger, J. (2002). <i>Bollinger on Bollinger Bands</i>. McGraw-Hill.",
 ]
 for ref in refs:
     story.append(Paragraph(ref, styles["BibEntry"]))
@@ -1081,6 +1244,7 @@ add_table([
     ["10_model_training.ipynb", "End-to-end training pipeline and CV"],
     ["11_experiment_summary.ipynb", "Consolidated results summary"],
     ["12_hyperparameter_profitability.ipynb", "Hyperparameter optimization and profitability"],
+    ["13_generalization_fbeta_analysis.ipynb", "Generalization, F-beta, and profitability robustness"],
 ], col_widths=[6 * cm, 8 * cm])
 caption("Table C.1: Jupyter notebook guide.")
 spacer(5)

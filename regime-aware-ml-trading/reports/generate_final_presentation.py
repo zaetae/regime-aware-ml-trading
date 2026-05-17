@@ -176,7 +176,7 @@ results_img = _make_results_comparison()
 # ---------------------------------------------------------------------------
 print("Building presentation PDF...")
 
-OUTPUT = os.path.join(FINAL, "Zeineb_Turki_bem.pdf")
+OUTPUT = os.path.join(FINAL, "Zeineb_Turki_bem2.pdf")
 
 doc = SimpleDocTemplate(
     OUTPUT, pagesize=landscape(A4),
@@ -394,7 +394,41 @@ story.append(Spacer(1, 3 * mm))
 body("<b>Key finding:</b> optimal parameters for classification (F1) differ from those for profitability (return). "
      "This confirms that trading evaluation requires profitability metrics beyond accuracy.")
 
-# ===== SLIDE 11: Limitations =====
+# ===== SLIDE 11: Generalization & Variance =====
+slide_break()
+slide_title("Generalization & Variance Analysis", "How stable are results across time folds?")
+bullet("Walk-forward CV (5 folds): <b>mean \u00b1 std</b> reported for all metrics")
+bullet("High variance across folds = instability \u2014 results depend on which period is tested")
+story.append(Spacer(1, 3 * mm))
+add_table([
+    ["Metric", "WF Mean", "WF Std", "Interpretation"],
+    ["F1 Macro", "\u22480.27", "\u22480.03", "Moderate stability"],
+    ["Cum. Return", "\u22480.03", "\u22480.03", "High relative variance"],
+    ["Win Rate", "\u224850%", "\u22487%", "Thin edge, regime-dependent"],
+    ["Sharpe", "\u22480.11", "\u22480.14", "Unstable risk-adjusted return"],
+], col_widths=[3.5 * cm, 3 * cm, 3 * cm, 6 * cm])
+story.append(Spacer(1, 4 * mm))
+body("<b>Key insight:</b> point estimates like \u2018F1=0.569\u2019 represent one realisation from a "
+     "high-variance distribution. The true out-of-sample performance could be substantially different.")
+
+# ===== SLIDE 12: F-Beta Analysis =====
+slide_break()
+slide_title("F-Beta Analysis", "Precision vs recall for trading decisions")
+bullet("<b>F0.5 (precision-heavy):</b> fewer but cleaner trades \u2014 avoid false positives")
+bullet("<b>F1.0 (balanced):</b> equal weight to false positives and false negatives")
+bullet("<b>F2.0 (recall-heavy):</b> capture more opportunities \u2014 tolerate false positives")
+story.append(Spacer(1, 3 * mm))
+add_table([
+    ["Error Type", "Trading Meaning", "Cost"],
+    ["False Positive", "Model says trade, but it loses", "Direct financial loss"],
+    ["False Negative", "Model says skip, but it would have won", "Missed opportunity"],
+], col_widths=[3.5 * cm, 7 * cm, 5 * cm])
+story.append(Spacer(1, 4 * mm))
+body("<b>Finding:</b> Precision remains low across all folds, meaning many signals are false alarms. "
+     "The optimal beta depends on risk tolerance: capital-preservation strategies should favour F0.5, "
+     "opportunity-seeking strategies should favour F2.0.")
+
+# ===== SLIDE 13: Limitations =====
 slide_break()
 slide_title("Limitations", "Honest assessment of constraints")
 bullet("<b>Small dataset:</b> ~140 events provides limited statistical power; high result variance")
@@ -408,7 +442,7 @@ story.append(Spacer(1, 8 * mm))
 body("All results should be interpreted as <i>preliminary research findings</i>, "
      "not production-ready trading signals.")
 
-# ===== SLIDE 12: Conclusion & Future Work =====
+# ===== SLIDE 14: Conclusion & Future Work =====
 slide_break()
 slide_title("Conclusion & Future Work")
 body("<b>What was achieved:</b>")
@@ -428,4 +462,4 @@ bullet("Regime-aware dynamic TP/SL, HMM integration, more advanced models")
 # ===== BUILD =====
 doc.build(story)
 print(f"\nPresentation saved: {OUTPUT}")
-print(f"Slides: 12")
+print(f"Slides: 14")
