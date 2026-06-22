@@ -1,1 +1,0 @@
-# HMM regime detection module.
