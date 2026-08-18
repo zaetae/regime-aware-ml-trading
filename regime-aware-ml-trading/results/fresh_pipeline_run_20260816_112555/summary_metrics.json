@@ -1,0 +1,92 @@
+{
+  "run_id": "fresh_pipeline_run_20260816_112555",
+  "label_distribution": {
+    "long": 30,
+    "no_trade": 82,
+    "short": 16
+  },
+  "label_distribution_share": {
+    "long": 0.234375,
+    "no_trade": 0.640625,
+    "short": 0.125
+  },
+  "historic_report_distribution": {
+    "long": 58,
+    "short": 43,
+    "no_trade": 36
+  },
+  "best_f1_params": {
+    "pt_mult": 1.0,
+    "sl_mult": 3.0,
+    "max_holding": 20
+  },
+  "best_f1_score": 0.6794,
+  "best_profit_params": {
+    "pt_mult": 1.5,
+    "sl_mult": 3.0,
+    "max_holding": 20
+  },
+  "best_profit_score": 0.129523,
+  "test_classification_rf": {
+    "model_name": "Random Forest (test)",
+    "accuracy": 0.381,
+    "f1_macro": 0.3434,
+    "f1_weighted": 0.3283,
+    "confusion_matrix": "[[5 2 0]\n [2 3 1]\n [0 8 0]]",
+    "classification_report": {
+      "long": {
+        "precision": 0.7142857142857143,
+        "recall": 0.7142857142857143,
+        "f1-score": 0.7142857142857143,
+        "support": 7.0
+      },
+      "no_trade": {
+        "precision": 0.23076923076923078,
+        "recall": 0.5,
+        "f1-score": 0.3157894736842105,
+        "support": 6.0
+      },
+      "short": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1-score": 0.0,
+        "support": 8.0
+      },
+      "accuracy": 0.38095238095238093,
+      "macro avg": {
+        "precision": 0.315018315018315,
+        "recall": 0.4047619047619048,
+        "f1-score": 0.3433583959899749,
+        "support": 21.0
+      },
+      "weighted avg": {
+        "precision": 0.30402930402930406,
+        "recall": 0.38095238095238093,
+        "f1-score": 0.3283208020050125,
+        "support": 21.0
+      }
+    },
+    "y_pred": "['no_trade' 'no_trade' 'short' 'no_trade' 'long' 'long' 'no_trade'\n 'no_trade' 'long' 'no_trade' 'no_trade' 'long' 'no_trade' 'no_trade'\n 'no_trade' 'long' 'long' 'long' 'no_trade' 'no_trade' 'no_trade']",
+    "y_proba": "[[0.3        0.565      0.135     ]\n [0.36       0.515      0.125     ]\n [0.185      0.33       0.485     ]\n [0.36       0.425      0.215     ]\n [0.485      0.425      0.09      ]\n [0.80745098 0.17754902 0.015     ]\n [0.345      0.475      0.18      ]\n [0.21       0.585      0.205     ]\n [0.67745098 0.31254902 0.01      ]\n [0.275      0.57       0.155     ]\n [0.185      0.60297996 0.21202004]\n [0.67245098 0.31754902 0.01      ]\n [0.24       0.475      0.285     ]\n [0.265      0.475      0.26      ]\n [0.15328947 0.54171053 0.305     ]\n [0.525      0.4        0.075     ]\n [0.595      0.375      0.03      ]\n [0.74121359 0.19531419 0.06347222]\n [0.3        0.42       0.28      ]\n [0.08       0.75       0.17      ]\n [0.215      0.56       0.225     ]]",
+    "labels": [
+      "long",
+      "no_trade",
+      "short"
+    ]
+  },
+  "test_profitability_rf": {
+    "n_trades": 8,
+    "cumulative_return": -0.044683,
+    "avg_trade_return": -0.005585,
+    "win_rate": 0.625,
+    "profit_factor": 0.5956,
+    "sharpe_ratio": -0.2099,
+    "max_drawdown": 0.036817,
+    "avg_bars_held": 5.62,
+    "n_long": 7,
+    "n_short": 1,
+    "n_tp": 5,
+    "n_sl": 3,
+    "n_time_exit": 0
+  }
+}

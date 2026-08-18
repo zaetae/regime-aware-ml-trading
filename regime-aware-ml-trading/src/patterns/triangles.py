@@ -54,6 +54,7 @@ def detect_triangle_pattern(df, window=25, min_convergence_pct=0.05,
     atr = compute_atr(df, window=14)
 
     signals = pd.Series(None, index=df.index, dtype=object)
+    breakout_directions = pd.Series(pd.NA, index=df.index, dtype="object")
     details = [] if return_details else None
     bars_since_last = cooldown + 1
 
@@ -140,20 +141,35 @@ def detect_triangle_pattern(df, window=25, min_convergence_pct=0.05,
         recent_high = highs[-3:].max()
         recent_low = lows[-3:].min()
 
-        breakout_up = current_high > recent_high + 0.3 * atr_i
-        breakout_down = current_low < recent_low - 0.3 * atr_i
+        range_breakout_up = current_high > recent_high + 0.3 * atr_i
+        range_breakout_down = current_low < recent_low - 0.3 * atr_i
 
-        if breakout_up or breakout_down:
+        # Confirm the breakout with the event-bar Close beyond the fitted
+        # formation boundary.  Shape and breakout direction are distinct.
+        current_close = df["Close"].iloc[i]
+        upper_at_current = np.polyval(high_coeffs, window)
+        lower_at_current = np.polyval(low_coeffs, window)
+        breakout_direction = None
+        if range_breakout_up and current_close > upper_at_current:
+            breakout_direction = "up"
+        elif range_breakout_down and current_close < lower_at_current:
+            breakout_direction = "down"
+
+        if breakout_direction is not None:
             if is_ascending:
                 signals.iloc[i] = "ascending_triangle"
             elif is_descending:
                 signals.iloc[i] = "descending_triangle"
             else:
                 signals.iloc[i] = "symmetric_triangle"
+            breakout_directions.iloc[i] = breakout_direction
             if return_details:
                 details.append(_make_detail(
                     df, i, signals.iloc[i], high_coeffs, low_coeffs,
                     window, cr, rmax, rmin, sh_idx, sl_idx, atr_i,
+                    breakout_direction=breakout_direction,
+                    upper_at_event=upper_at_current,
+                    lower_at_event=lower_at_current,
                 ))
             bars_since_last = 0
             continue
@@ -161,7 +177,6 @@ def detect_triangle_pattern(df, window=25, min_convergence_pct=0.05,
         # --- Step 6b: descending triangle upper-limit test ---
         if is_descending:
             upper_at_current = np.polyval(high_coeffs, window)
-            current_close = df["Close"].iloc[i]
             if abs(current_close - upper_at_current) < 0.3 * atr_i:
                 signals.iloc[i] = "desc_triangle_upper_test"
                 if return_details:
@@ -169,17 +184,27 @@ def detect_triangle_pattern(df, window=25, min_convergence_pct=0.05,
                         df, i, "desc_triangle_upper_test",
                         high_coeffs, low_coeffs,
                         window, cr, rmax, rmin, sh_idx, sl_idx, atr_i,
+                        breakout_direction=None,
+                        upper_at_event=upper_at_current,
+                        lower_at_event=lower_at_current,
                     ))
                 bars_since_last = 0
 
     df["triangle_pattern"] = signals
+    df["triangle_breakout_direction"] = breakout_directions
+    if "intended_direction" not in df.columns:
+        df["intended_direction"] = pd.Series(pd.NA, index=df.index, dtype="object")
+    df.loc[breakout_directions == "up", "intended_direction"] = "long"
+    df.loc[breakout_directions == "down", "intended_direction"] = "short"
     if return_details:
         return df, details
     return df
 
 
 def _make_detail(df, i, pattern_type, high_coeffs, low_coeffs,
-                 window, cr, r_upper, r_lower, sh_idx, sl_idx, atr_i):
+                 window, cr, r_upper, r_lower, sh_idx, sl_idx, atr_i,
+                 breakout_direction=None, upper_at_event=None,
+                 lower_at_event=None):
     """Build a metadata dict for one detection, including touch statistics."""
     start = i - window
     highs = df["High"].values[start:i]
@@ -205,6 +230,11 @@ def _make_detail(df, i, pattern_type, high_coeffs, low_coeffs,
     return {
         "event_date": df.index[i],
         "pattern_type": pattern_type,
+        "breakout_direction": breakout_direction,
+        "upper_at_event": (float(upper_at_event)
+                           if upper_at_event is not None else np.nan),
+        "lower_at_event": (float(lower_at_event)
+                           if lower_at_event is not None else np.nan),
         "start_idx": start,
         "end_idx": i,
         "start_date": df.index[start],

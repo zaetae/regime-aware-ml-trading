@@ -80,4 +80,11 @@ def detect_multiple_tops_bottoms(df, window=20, confirm_bars=5, cooldown=10):
     df.loc[top_filtered, "multiple_top_bottom_pattern"] = "multiple_top"
     df.loc[bottom_filtered, "multiple_top_bottom_pattern"] = "multiple_bottom"
 
+    # Preserve a direction supplied by an earlier detector on the same bar;
+    # pattern-specific direction takes precedence for the scanner's event type.
+    if "intended_direction" not in df.columns:
+        df["intended_direction"] = pd.Series(pd.NA, index=df.index, dtype="object")
+    df.loc[top_filtered, "intended_direction"] = "short"
+    df.loc[bottom_filtered, "intended_direction"] = "long"
+
     return df

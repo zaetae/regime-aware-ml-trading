@@ -37,6 +37,31 @@ def scan_all_patterns(df, sr_window=50, tri_window=25, mtb_window=50):
     df = detect_multiple_tops_bottoms(df, window=mtb_window)
     df = detect_channel(df)
 
+    # Resolve direction using the same priority as _get_event_type() in the
+    # labeling module.  A triangle upper-test is directionless by design and
+    # therefore cannot fall through to a lower-priority signal on the bar.
+    direction = pd.Series(pd.NA, index=df.index, dtype="object")
+    tri_active = df["triangle_pattern"].notna()
+    direction.loc[tri_active] = df.loc[tri_active, "triangle_breakout_direction"].map(
+        {"up": "long", "down": "short"}
+    )
+
+    no_tri = ~tri_active
+    channel_dir = df["channel_pattern"].map({"channel_up": "long", "channel_down": "short"})
+    channel_active = no_tri & channel_dir.notna()
+    direction.loc[channel_active] = channel_dir.loc[channel_active]
+
+    mtb_dir = df["multiple_top_bottom_pattern"].map(
+        {"multiple_top": "short", "multiple_bottom": "long"}
+    )
+    mtb_active = no_tri & ~channel_active & mtb_dir.notna()
+    direction.loc[mtb_active] = mtb_dir.loc[mtb_active]
+
+    sr_active = no_tri & ~channel_active & ~mtb_active
+    direction.loc[sr_active & df["near_resistance"]] = "short"
+    direction.loc[sr_active & df["near_support"]] = "long"
+    df["intended_direction"] = direction
+
     # Unified event flag: True if any pattern signal fires
     df["has_event"] = (
         df["near_support"]

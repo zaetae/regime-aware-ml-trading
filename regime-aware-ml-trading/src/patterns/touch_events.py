@@ -78,6 +78,10 @@ def generate_sr_touch_events(df, atr_mult=0.2, cooldown=10,
     # Apply cooldown
     df["touch_resistance"] = _apply_cooldown(raw_touch_res, cooldown)
     df["touch_support"] = _apply_cooldown(raw_touch_sup, cooldown)
+    if "intended_direction" not in df.columns:
+        df["intended_direction"] = pd.Series(pd.NA, index=df.index, dtype="object")
+    df.loc[df["touch_support"], "intended_direction"] = "long"
+    df.loc[df["touch_resistance"], "intended_direction"] = "short"
 
     return df
 
@@ -157,6 +161,12 @@ def generate_channel_touch_events(df, atr_mult=0.2, cooldown=10):
 
     df["touch_channel_upper"] = _apply_cooldown(touch_upper, cooldown)
     df["touch_channel_lower"] = _apply_cooldown(touch_lower, cooldown)
+    if "intended_direction" not in df.columns:
+        df["intended_direction"] = pd.Series(pd.NA, index=df.index, dtype="object")
+    # Boundary-touch events are mean-reversion proposals: upper -> short,
+    # lower -> long.  This is separate from channel trend direction.
+    df.loc[df["touch_channel_upper"], "intended_direction"] = "short"
+    df.loc[df["touch_channel_lower"], "intended_direction"] = "long"
 
     return df, ch_details
 

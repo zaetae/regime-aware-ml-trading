@@ -188,68 +188,13 @@ def _generate_touch_labels(df, pt_mult=2.0, sl_mult=2.0, max_holding=10,
     if len(touch_only) == 0:
         return pd.DataFrame()
 
-    # Label with triple-barrier
-    from src.data.utils import compute_atr
-    atr = compute_atr(df, window=14)
-
-    results = []
-    for event_date, row in touch_only.iterrows():
-        pos = df.index.get_loc(event_date)
-        entry_price = df["Close"].iloc[pos]
-        atr_val = atr.iloc[pos]
-
-        if pd.isna(atr_val) or atr_val <= 0:
-            continue
-
-        upper = entry_price + pt_mult * atr_val
-        lower = entry_price - sl_mult * atr_val
-
-        end_pos = min(pos + max_holding, len(df) - 1)
-        label = "no_trade"
-        exit_price = df["Close"].iloc[end_pos]
-        exit_date = df.index[end_pos]
-        bars_held = end_pos - pos
-
-        for j in range(pos + 1, min(pos + max_holding + 1, len(df))):
-            high_j = df["High"].iloc[j]
-            low_j = df["Low"].iloc[j]
-            hit_upper = high_j >= upper
-            hit_lower = low_j <= lower
-
-            if hit_upper and hit_lower:
-                close_j = df["Close"].iloc[j]
-                label = "long" if close_j >= entry_price else "short"
-                exit_price = close_j
-                exit_date = df.index[j]
-                bars_held = j - pos
-                break
-            elif hit_upper:
-                label = "long"
-                exit_price = upper
-                exit_date = df.index[j]
-                bars_held = j - pos
-                break
-            elif hit_lower:
-                label = "short"
-                exit_price = lower
-                exit_date = df.index[j]
-                bars_held = j - pos
-                break
-
-        return_pct = (exit_price - entry_price) / entry_price * 100
-
-        results.append({
-            "event_date": event_date,
-            "event_type": _get_touch_event_type(row),
-            "entry_price": round(entry_price, 2),
-            "atr": round(atr_val, 4),
-            "upper_barrier": round(upper, 2),
-            "lower_barrier": round(lower, 2),
-            "exit_date": exit_date,
-            "exit_price": round(exit_price, 2),
-            "bars_held": bars_held,
-            "label": label,
-            "return_pct": round(return_pct, 4),
-        })
-
-    return pd.DataFrame(results)
+    # Use the same position-specific triple-barrier convention as all other
+    # events; maintaining a second implementation previously caused drift.
+    labeled = triple_barrier_label(
+        df, touch_only, pt_mult=pt_mult, sl_mult=sl_mult,
+        max_holding=max_holding,
+    )
+    if len(labeled) > 0:
+        event_types = touch_only.apply(_get_touch_event_type, axis=1)
+        labeled["event_type"] = labeled["event_date"].map(event_types)
+    return labeled

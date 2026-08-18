@@ -70,6 +70,12 @@ def calculate_support_resistance(df, window=50, atr_mult=0.3,
     df["near_resistance"] = _apply_cooldown(raw_near_res, cooldown)
     df["near_support"] = _apply_cooldown(raw_near_sup, cooldown)
 
+    # Direction is part of the event definition, not inferred from its
+    # subsequent return.  It is consumed by triple-barrier labeling.
+    df["intended_direction"] = pd.Series(pd.NA, index=df.index, dtype="object")
+    df.loc[df["near_support"], "intended_direction"] = "long"
+    df.loc[df["near_resistance"], "intended_direction"] = "short"
+
     return df
 
 

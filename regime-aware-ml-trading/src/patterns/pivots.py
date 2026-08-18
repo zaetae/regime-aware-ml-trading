@@ -173,3 +173,74 @@ def count_touches(prices, line_values, tolerance, side="upper"):
         "max_error": float(touch_errors.max()) if len(touch_errors) > 0 else 0.0,
         "violations": int(violation_mask.sum()),
     }
+def count_pivot_touches(prices, line_values, pivot_indices, tolerance, side="upper"):
+    """Count trendline touches only at independently detected swing pivots.
+
+    Parameters
+    ----------
+    prices : np.ndarray
+        High prices for upper-boundary validation or Low prices for lower.
+    line_values : np.ndarray
+        Fitted trendline values across the same window.
+    pivot_indices : list[int]
+        Swing-pivot indices previously detected with find_swing_highs/lows.
+    tolerance : float
+        ATR-scaled maximum distance from pivot to line.
+    side : {"upper", "lower"}
+        Boundary being validated.
+
+    Returns
+    -------
+    dict
+        touch_count, touch_indices, mean_error, max_error, violations
+    """
+    prices = np.asarray(prices, dtype=float)
+    line_values = np.asarray(line_values, dtype=float)
+
+    n = min(len(prices), len(line_values))
+    prices = prices[:n]
+    line_values = line_values[:n]
+
+    valid_pivots = [
+        int(i) for i in pivot_indices
+        if 0 <= int(i) < n
+    ]
+
+    if side == "upper":
+        # Positive = pivot remains inside/below the upper boundary.
+        signed_dist = line_values - prices
+    elif side == "lower":
+        # Positive = pivot remains inside/above the lower boundary.
+        signed_dist = prices - line_values
+    else:
+        raise ValueError("side must be 'upper' or 'lower'")
+
+    abs_dist = np.abs(signed_dist)
+
+    touch_indices = []
+
+    for i in valid_pivots:
+        # Allow a small wick breach: up to half the tolerance outside.
+        if -0.5 * tolerance <= signed_dist[i] <= tolerance:
+            touch_indices.append(i)
+
+    touch_errors = (
+        abs_dist[touch_indices]
+        if touch_indices
+        else np.array([], dtype=float)
+    )
+
+    # Violations are measured on ALL bars, not only pivots.
+    violation_mask = signed_dist < -tolerance
+
+    return {
+        "touch_count": len(touch_indices),
+        "touch_indices": touch_indices,
+        "mean_error": (
+            float(touch_errors.mean()) if len(touch_errors) else 0.0
+        ),
+        "max_error": (
+            float(touch_errors.max()) if len(touch_errors) else 0.0
+        ),
+        "violations": int(violation_mask.sum()),
+    }

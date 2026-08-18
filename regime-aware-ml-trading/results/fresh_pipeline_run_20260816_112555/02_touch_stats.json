@@ -1,0 +1,10 @@
+{
+  "n_original_events": 129,
+  "n_touch_events": 39,
+  "n_new_touch_only": 38,
+  "n_combined_events": 167,
+  "touch_support": 4,
+  "touch_resistance": 35,
+  "touch_channel_upper": 0,
+  "touch_channel_lower": 0
+}

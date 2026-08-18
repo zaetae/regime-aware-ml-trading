@@ -46,12 +46,13 @@ def _get_event_type(row):
 # ------------------------------------------------------------------
 
 def triple_barrier_label(df, events, pt_mult=2.0, sl_mult=2.0,
-                         max_holding=10, atr_window=14):
+                         max_holding=10, atr_window=14,
+                         direction_col="intended_direction"):
     """Apply triple-barrier labeling to detected events.
 
     For each event bar the algorithm walks forward through subsequent bars
-    and checks whether price breaches the upper or lower barrier before the
-    time limit.
+    and checks position-specific profit-target and stop-loss barriers. The
+    event's intended direction must be determined causally by its detector.
 
     Parameters
     ----------
@@ -60,13 +61,15 @@ def triple_barrier_label(df, events, pt_mult=2.0, sl_mult=2.0,
     events : pd.DataFrame
         Subset of *df* where ``has_event == True`` (from the scanner).
     pt_mult : float
-        Upper barrier distance in ATR multiples (default 2.0).
+        Favorable-direction profit-target distance in ATR multiples.
     sl_mult : float
-        Lower barrier distance in ATR multiples (default 2.0).
+        Adverse-direction stop-loss distance in ATR multiples.
     max_holding : int
         Maximum bars to hold before the time barrier (default 10).
     atr_window : int
         ATR lookback period (default 14).
+    direction_col : str
+        Event column containing ``"long"`` or ``"short"``.
 
     Returns
     -------
@@ -78,8 +81,9 @@ def triple_barrier_label(df, events, pt_mult=2.0, sl_mult=2.0,
         event_type     Which pattern fired (e.g. "channel_up")
         entry_price    Close at event bar
         atr            ATR value at event bar
-        upper_barrier  entry + pt_mult * ATR
-        lower_barrier  entry - sl_mult * ATR
+        intended_direction  Detector-defined proposed trade direction
+        tp_price       Position-specific profit-target price
+        sl_price       Position-specific stop-loss price
         exit_date      Date when a barrier was touched
         exit_price     Price at exit (barrier level or Close at expiry)
         bars_held      Number of bars from entry to exit (1..max_holding)
@@ -87,10 +91,21 @@ def triple_barrier_label(df, events, pt_mult=2.0, sl_mult=2.0,
         return_pct     (exit_price - entry_price) / entry_price * 100
         ============== ==============================================
     """
+    if direction_col not in events.columns:
+        raise ValueError(
+            f"events must include '{direction_col}' with values 'long' or 'short'"
+        )
+
     atr = compute_atr(df, window=atr_window)
 
     results = []
     for event_date, row in events.iterrows():
+        intended_direction = row[direction_col]
+        if intended_direction not in {"long", "short"}:
+            raise ValueError(
+                f"Invalid {direction_col}={intended_direction!r} at {event_date}"
+            )
+
         pos = df.index.get_loc(event_date)
         entry_price = df["Close"].iloc[pos]
         atr_val = atr.iloc[pos]
@@ -98,8 +113,12 @@ def triple_barrier_label(df, events, pt_mult=2.0, sl_mult=2.0,
         if pd.isna(atr_val) or atr_val <= 0:
             continue
 
-        upper = entry_price + pt_mult * atr_val
-        lower = entry_price - sl_mult * atr_val
+        if intended_direction == "long":
+            tp_price = entry_price + pt_mult * atr_val
+            sl_price = entry_price - sl_mult * atr_val
+        else:
+            tp_price = entry_price - pt_mult * atr_val
+            sl_price = entry_price + sl_mult * atr_val
 
         # Default: time barrier (expiry)
         end_pos = min(pos + max_holding, len(df) - 1)
@@ -108,49 +127,63 @@ def triple_barrier_label(df, events, pt_mult=2.0, sl_mult=2.0,
         exit_date = df.index[end_pos]
         bars_held = end_pos - pos
 
-        # Walk forward, check High/Low against barriers
+        exit_reason = "time_exit"
+
+        # Walk forward, using the exact position-specific convention used by
+        # backtest.simulator.simulate_trades().
         for j in range(pos + 1, min(pos + max_holding + 1, len(df))):
             high_j = df["High"].iloc[j]
             low_j = df["Low"].iloc[j]
 
-            hit_upper = high_j >= upper
-            hit_lower = low_j <= lower
+            if intended_direction == "long":
+                hit_tp = high_j >= tp_price
+                hit_sl = low_j <= sl_price
+            else:
+                hit_tp = low_j <= tp_price
+                hit_sl = high_j >= sl_price
 
-            if hit_upper and hit_lower:
-                # Both barriers breached on the same bar — use Close
-                close_j = df["Close"].iloc[j]
-                label = "long" if close_j >= entry_price else "short"
-                exit_price = close_j
+            if hit_tp and hit_sl:
+                # Daily OHLC does not reveal barrier-hit order. Preserve the
+                # simulator's close exit, but leave the label as no_trade.
+                exit_price = df["Close"].iloc[j]
                 exit_date = df.index[j]
+                exit_reason = "both_barriers"
                 bars_held = j - pos
                 break
-            elif hit_upper:
-                label = "long"
-                exit_price = upper
+            elif hit_tp:
+                label = intended_direction
+                exit_price = tp_price
                 exit_date = df.index[j]
+                exit_reason = "take_profit"
                 bars_held = j - pos
                 break
-            elif hit_lower:
-                label = "short"
-                exit_price = lower
+            elif hit_sl:
+                exit_price = sl_price
                 exit_date = df.index[j]
+                exit_reason = "stop_loss"
                 bars_held = j - pos
                 break
 
-        return_pct = (exit_price - entry_price) / entry_price * 100
+        raw_return = (
+            (exit_price - entry_price) / entry_price
+            if intended_direction == "long"
+            else (entry_price - exit_price) / entry_price
+        )
 
         results.append({
             "event_date": event_date,
             "event_type": _get_event_type(row),
+            "intended_direction": intended_direction,
             "entry_price": round(entry_price, 2),
             "atr": round(atr_val, 4),
-            "upper_barrier": round(upper, 2),
-            "lower_barrier": round(lower, 2),
+            "tp_price": round(tp_price, 2),
+            "sl_price": round(sl_price, 2),
             "exit_date": exit_date,
             "exit_price": round(exit_price, 2),
+            "exit_reason": exit_reason,
             "bars_held": bars_held,
             "label": label,
-            "return_pct": round(return_pct, 4),
+            "return_pct": round(raw_return * 100, 4),
         })
 
     return pd.DataFrame(results)
@@ -221,6 +254,10 @@ def label_events(df, pt_mult=2.0, sl_mult=2.0, max_holding=10,
             for s in kept_signals[1:]:
                 has_any = has_any | s
             events = events[has_any]
+
+    # Directionless events (currently descending-triangle upper tests) are
+    # retained in detector output but cannot define a directional trade label.
+    events = events[events["intended_direction"].isin(["long", "short"])]
 
     return triple_barrier_label(df, events, pt_mult, sl_mult,
                                 max_holding, atr_window)
