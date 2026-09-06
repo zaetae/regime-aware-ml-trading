@@ -70,6 +70,7 @@ def detect_channel(
     return_details=False,
     min_containment=0.70,
     touch_validation="swing",
+    touch_tolerance_atr=0.20,
 ):
     """Detect price channels using candidate fitting and pivot validation."""
 
@@ -238,7 +239,7 @@ def detect_channel(
         # ------------------------------------------------------------
         # Step 8: touch validation
         # ------------------------------------------------------------
-        touch_tol = 0.20 * atr_i
+        touch_tol = touch_tolerance_atr * atr_i
 
         # Detect actual swing pivots independently
         swing_high_idx = find_swing_highs(
