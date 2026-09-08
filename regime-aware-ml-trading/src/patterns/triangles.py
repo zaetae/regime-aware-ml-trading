@@ -6,9 +6,10 @@ from src.data.utils import compute_atr
 from src.patterns.pivots import find_swing_highs, find_swing_lows, containment_ratio, count_touches
 
 
-def detect_triangle_pattern(df, window=25, min_convergence_pct=0.05,
+def detect_triangle_pattern(df, window=20, min_convergence_pct=0.05,
                             cooldown=10, return_details=False,
-                            pivot_order=3, min_pivots=2, min_r=0.85):
+                            pivot_order=2, min_pivots=2, min_r=0.85,
+                            flat_threshold_mult=0.25):
     """Detect triangle patterns using the pivot + linregress approach.
 
     Closely follows the *TrianglePricePatterns* reference notebook:
@@ -117,10 +118,14 @@ def detect_triangle_pattern(df, window=25, min_convergence_pct=0.05,
         if compression < min_convergence_pct:
             continue
 
-        # --- Step 5: classify triangle type (ATR-normalised slopes) ---
-        # Notebook uses absolute thresholds; we normalise by ATR for
-        # robustness across price levels.
-        flat_threshold = 0.1 * atr_i / window
+               # --- Step 5: classify triangle type (relative slope threshold) ---
+        # A slope is "flat" if it is small RELATIVE to the other slope's
+        # magnitude, rather than compared to a fixed tiny ATR-based value.
+        # The fixed threshold caused near-total collapse into "symmetric"
+        # classification; empirical testing found mult=0.25 recovers a
+        # realistic mix of ascending/descending/symmetric triangles.
+        scale = max(abs(slmax), abs(slmin), 1e-9)
+        flat_threshold = flat_threshold_mult * scale
         is_ascending = abs(slmax) < flat_threshold and slmin > flat_threshold
         is_descending = slmax < -flat_threshold and abs(slmin) < flat_threshold
         is_symmetric = slmax < -flat_threshold and slmin > flat_threshold
