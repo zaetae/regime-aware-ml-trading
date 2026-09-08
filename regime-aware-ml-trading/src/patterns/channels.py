@@ -56,22 +56,22 @@ def _confidence_score(upper_tc, lower_tc, cr, parallelism, width_atr):
              0.20 * para_score + 0.15 * width_score) * 100
     return round(score, 1)
 
-
 def detect_channel(
     df,
     backcandles=40,
     brange=15,
     wind=5,
     pivot_order=3,
-    min_upper_touches=2,
-    min_lower_touches=3,
+    min_upper_touches=2,      # was 2, unchanged
+    min_lower_touches=2,      # was 3, now symmetric
     slope_tolerance=0.25,
     cooldown=10,
     return_details=False,
     min_containment=0.70,
-    touch_validation="swing",
-    touch_tolerance_atr=0.20,
+    touch_validation="local", # was "swing" (which gave zero results)
+    touch_tolerance_atr=0.15, # was hardcoded 0.20
 ):
+
     """Detect price channels using candidate fitting and pivot validation."""
 
     df = df.copy()
