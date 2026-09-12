@@ -6,8 +6,7 @@ from src.patterns.multiple_tops_bottoms import detect_multiple_tops_bottoms
 from src.patterns.channels import detect_channel
 
 
-def scan_all_patterns(df, sr_window=50, tri_window=25, mtb_window=50):
-    """Run all 4 pattern detectors and return the enriched DataFrame.
+def scan_all_patterns(df, sr_window=50, tri_window=20, mtb_window=50):    """Run all 4 pattern detectors and return the enriched DataFrame.
 
     Each detector uses its own tuned default parameters internally.
 
